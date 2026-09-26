@@ -121,7 +121,8 @@ async function reset() {
     <div class="list">
       <div v-for="(m, i) in messages" :key="i" :class="['msg', m.role]">
         <span class="who">{{ m.role === 'user' ? '我' : 'AI' }}</span>
-        <span class="text">{{ m.content || '…' }}</span>
+        <MarkdownText v-if="m.role === 'assistant'" :text="m.content" />
+        <span v-else class="text">{{ m.content || '…' }}</span>
       </div>
       <p v-if="!messages.length" class="empty">问点什么，比如「解释一下 ref 和 reactive 的区别」</p>
     </div>
@@ -137,7 +138,9 @@ async function reset() {
 .wrap { max-width: 680px; margin: 40px auto; font-family: system-ui; }
 header { display: flex; justify-content: space-between; align-items: center; }
 .list { margin: 16px 0; display: flex; flex-direction: column; gap: 10px; }
-.msg { display: flex; gap: 8px; padding: 10px 12px; border-radius: 8px; white-space: pre-wrap; }
+.msg { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 8px; }
+.msg .text { flex: 1; min-width: 0; }
+.msg.user .text { white-space: pre-wrap; }
 .msg.user { background: #eef4ff; }
 .msg.assistant { background: #f6f6f6; }
 .who { flex: none; font-weight: 600; opacity: .6; }
