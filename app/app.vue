@@ -1,5 +1,6 @@
 <script setup lang="ts">
 type Msg = { role: 'user' | 'assistant'; content: string }
+type HistoryRow = { id: number; role: string; content: string }
 
 const input = ref('')
 const messages = ref<Msg[]>([])
@@ -9,8 +10,24 @@ const MAX_TURNS = 20
 
 onMounted(async () => {
   conversationId.value = localStorage.getItem('conversationId')
-  if (!conversationId.value) await createConversation()
+  if (conversationId.value) {
+    await loadHistory(conversationId.value)
+  } else {
+    await createConversation()
+  }
 })
+
+async function loadHistory(id: string) {
+  try {
+    const rows = await $fetch<HistoryRow[]>(`/api/conversations/${id}`)
+    messages.value = rows
+      .filter(r => r.role === 'user' || r.role === 'assistant')
+      .map(r => ({ role: r.role as Msg['role'], content: r.content }))
+  } catch (e) {
+    console.error('读取历史失败', e)
+    messages.value = []
+  }
+}
 
 async function createConversation() {
   try {
@@ -30,7 +47,6 @@ async function saveMessage(role: 'user' | 'assistant', content: string) {
       body: { conversationId: conversationId.value, role, content },
     })
   } catch (e) {
-    // 存库失败不应该影响用户看到回答
     console.error('保存消息失败', e)
   }
 }
