@@ -6,5 +6,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     // 由环境变量 NUXT_DEEPSEEK_KEY 覆盖
     deepseekKey: '',
+    supabaseUrl: '',
+    supabaseServiceKey: '',
   },
 })
