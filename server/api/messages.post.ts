@@ -18,6 +18,7 @@ export default defineEventHandler(async (event) => {
     .single()
 
   if (error) {
+    console.error('[messages] 保存消息失败', error)
     throw createError({ statusCode: 500, statusMessage: '保存消息失败', data: error.message })
   }
   return data

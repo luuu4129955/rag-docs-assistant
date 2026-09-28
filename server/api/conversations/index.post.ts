@@ -7,6 +7,7 @@ export default defineEventHandler(async (event) => {
     .single()
 
   if (error) {
+    console.error('[conversations] 创建会话失败', error)
     throw createError({ statusCode: 500, statusMessage: '创建会话失败', data: error.message })
   }
   return data
