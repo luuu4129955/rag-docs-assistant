@@ -8,5 +8,9 @@ export default defineNuxtConfig({
     deepseekKey: '',
     supabaseUrl: '',
     supabaseServiceKey: '',
+    // 向量化服务，默认硅基流动的 BGE-M3（1024 维，免费）
+    embeddingKey: '',
+    embeddingBase: 'https://api.siliconflow.cn/v1',
+    embeddingModel: 'BAAI/bge-m3',
   },
 })

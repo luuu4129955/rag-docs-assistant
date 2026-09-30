@@ -118,6 +118,10 @@ async function reset() {
       <button class="ghost" @click="reset">清空对话</button>
     </header>
 
+    <DocumentPanel />
+
+    <SearchPanel />
+
     <div class="list">
       <div v-for="(m, i) in messages" :key="i" :class="['msg', m.role]">
         <span class="who">{{ m.role === 'user' ? '我' : 'AI' }}</span>
