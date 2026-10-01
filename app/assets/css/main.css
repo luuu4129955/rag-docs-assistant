@@ -1,0 +1,90 @@
+/* 设计变量：全站唯一的颜色/圆角来源，换主题只改这里 */
+:root {
+  color-scheme: light dark;
+
+  --bg: light-dark(#e9eaec, #0f1114);
+  --surface: light-dark(#ffffff, #1b1e23);
+  --surface-2: light-dark(#f5f5f7, #22262c);
+  --side: light-dark(#f2f2f4, #171a1e);
+  --border: light-dark(#dcdde0, #31353b);
+  --border-soft: light-dark(#e9e9ec, #262a30);
+
+  --text: light-dark(#1c1f24, #e7e9ec);
+  --muted: light-dark(#6d7480, #98a1ad);
+  --accent: light-dark(#2f6fed, #6ea8fe);
+  --accent-fg: light-dark(#ffffff, #0f1114);
+  --accent-soft: light-dark(#e8effd, #22304a);
+  --ok: light-dark(#1f8a4c, #5bd18b);
+  --warn: light-dark(#a86400, #e0a94a);
+  --warn-soft: light-dark(#fff3d6, #3a2f16);
+  --danger: light-dark(#c0392b, #f08a80);
+
+  --radius: 10px;
+  --radius-sm: 7px;
+  --shadow-window: 0 18px 40px rgb(0 0 0 / .18);
+  --shadow-pop: 0 8px 24px rgb(0 0 0 / .16);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #__nuxt { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.6 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+p { margin: 0; }
+
+/* 细滚动条，接近 macOS 的手感 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: light-dark(rgb(0 0 0 / .18), rgb(255 255 255 / .18));
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 通用小控件，各组件复用 */
+.btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 6px 11px;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-fg);
+}
+.btn-primary:hover { filter: brightness(1.06); background: var(--accent); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+}
+.tag-ok { color: var(--ok); }
+.tag-warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+
+.panel-hint { color: var(--muted); font-size: 11px; }
+.num { font-variant-numeric: tabular-nums; }

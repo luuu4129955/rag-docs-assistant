@@ -2,6 +2,7 @@
 export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
   devtools: { enabled: true },
+  css: ['~/assets/css/main.css'],
 
   runtimeConfig: {
     // 由环境变量 NUXT_DEEPSEEK_KEY 覆盖

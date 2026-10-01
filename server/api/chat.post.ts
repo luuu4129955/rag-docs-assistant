@@ -42,7 +42,8 @@ function buildSystemPrompt(chunks: RetrievedChunk[]) {
    正确示例：主包从 569KB 降到 62KB [1]
    错误示例：主包从 569KB 降到 62KB（没有编号 —— 不允许出现）
 3. 只使用材料里的事实，不要用你自己的知识补充或推测。
-4. 材料里没有提到的内容，直接回答「材料里没有提到」，不要编造。
+4. 材料往往只是要点式的笔记，只要里面有相关信息，就基于它归纳作答，
+   并说明材料覆盖到哪一步；只有材料完全答不了这个问题时，才回答「材料里没有提到」。
 
 材料：
 ${context}`
@@ -116,6 +117,7 @@ export default defineEventHandler(async (event) => {
     usedCount: used.length,
     retrieved: retrievalOk,
     threshold,
+    model: chatModel,
   })
 
   // 有材料但一块都没过阈值 → 直接拒答，不花模型的钱

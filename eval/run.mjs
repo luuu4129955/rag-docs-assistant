@@ -11,7 +11,12 @@
  *   模型拒答   = 正文里出现「材料里没有提到」这类话术
  *   带引用     = 正文里出现 [n] 或 【n】
  */
+import { writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { questions } from './questions.mjs'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
 
 const BASE = process.env.RAG_EVAL_BASE || 'http://localhost:3000'
 const VERBOSE = process.argv.includes('--verbose')
@@ -113,7 +118,11 @@ console.log(`平均延迟        ${avg(results)}ms   最慢 ${maxMs}ms`)
 console.log(`阈值            ${results[0]?.r?.meta?.threshold ?? '未知'}`)
 
 console.log('\nJSON 摘要：')
-console.log(JSON.stringify({
+const summary = {
+  ranAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+  base: BASE,
+  model: results[0]?.r?.meta?.model ?? undefined,
+  threshold: results[0]?.r?.meta?.threshold ?? undefined,
   answered: `${answered.length}/${shouldAnswer.length}`,
   cited: `${citedRight.length}/${shouldAnswer.length}`,
   refused: `${refusedRight.length}/${shouldRefuse.length}`,
@@ -121,6 +130,16 @@ console.log(JSON.stringify({
   passed: `${results.filter(x => x.pass).length}/${results.length}`,
   avgMs: avg(results),
   maxMs,
-}, null, 2))
+}
+console.log(JSON.stringify(summary, null, 2))
+
+// 顺手落盘，页面上的「评测」面板会读它
+try {
+  writeFileSync(join(HERE, 'latest.json'), JSON.stringify(summary, null, 2), 'utf-8')
+  console.log(`\n已写入 ${join(HERE, 'latest.json')}`)
+}
+catch (e) {
+  console.warn('写入 latest.json 失败：', e?.message || e)
+}
 
 process.exit(results.every(x => x.pass) ? 0 : 1)
