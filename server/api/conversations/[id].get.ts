@@ -5,7 +5,7 @@ export default defineEventHandler(async (event) => {
   const db = supabaseServer(event)
   const { data, error } = await db
     .from('messages')
-    .select('id, role, content')
+    .select('id, role, content, sources')
     .eq('conversation_id', id)
     .order('id', { ascending: true })
 

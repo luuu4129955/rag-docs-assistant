@@ -33,12 +33,14 @@ async function onPick(e: Event) {
   try {
     const form = new FormData()
     form.append('file', file)
-    const r = await $fetch<{ charCount: number, chunkCount: number }>('/api/documents', {
+    const r = await $fetch<{ id: string, charCount: number, chunkCount: number }>('/api/documents', {
       method: 'POST',
       body: form,
     })
-    message.value = `解析完成：${r.charCount} 字，切成 ${r.chunkCount} 块。下一步点「向量化」。`
+    message.value = `解析完成：${r.charCount} 字，切成 ${r.chunkCount} 块，正在向量化…`
     await load()
+    // 上传后立刻向量化：少了这一步，文档就在库里但检索永远找不到它
+    await embedAll(r.id)
   }
   catch (err: any) {
     const brief = err?.data?.statusMessage || err?.statusMessage || err?.message || '未知错误'
@@ -65,7 +67,7 @@ async function embedAll(documentId?: string) {
       })
       total += r.embedded
       message.value = r.done
-        ? `向量化完成：本次处理 ${total} 块`
+        ? `向量化完成：本次处理 ${total} 块，可以开始提问了`
         : `向量化中… 本次已处理 ${total} 块，剩余 ${r.remaining} 块`
       if (r.done) break
     }
@@ -126,6 +128,7 @@ onMounted(load)
             分块 {{ d.chunkCount }} ·
             向量 {{ d.embeddedCount }}/{{ d.chunkCount }}
           </span>
+          <span v-if="d.chunkCount > d.embeddedCount" class="badge">待向量化</span>
         </li>
       </ul>
       <p v-else class="empty">
@@ -191,6 +194,16 @@ summary {
 }
 .docs li:last-child { border-bottom: none; }
 .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.meta { flex: none; color: #888; font-size: 13px; }
+.meta { flex: none; color: #888; font-size: 13px; margin-left: auto; }
+.badge {
+  flex: none;
+  align-self: center;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fff3d6;
+  color: #b45309;
+  font-size: 12px;
+}
 .empty { color: #999; font-size: 13px; margin: 10px 0 0; }
 </style>

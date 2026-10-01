@@ -22,5 +22,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 500, statusMessage: '检索失败', data: error.message })
   }
 
-  return { query, k, results: data ?? [] }
+  // 带上聊天接口用的阈值：调试面板不做过滤，但要让调用方知道哪些块会被采用
+  const config = useRuntimeConfig(event)
+  const threshold = Number(config.ragThreshold) || 0.35
+
+  return { query, k, threshold, results: data ?? [] }
 })
