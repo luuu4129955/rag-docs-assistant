@@ -25,9 +25,9 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'update:tab', tab: 'src' | 'debug' | 'eval'): void }>()
 
 const tabs = [
-  { key: 'src' as const, label: '来源' },
-  { key: 'debug' as const, label: '检索调试' },
-  { key: 'eval' as const, label: '评测' },
+  { key: 'src' as const, label: '来源', icon: 'link' },
+  { key: 'debug' as const, label: '检索调试', icon: 'search' },
+  { key: 'eval' as const, label: '评测', icon: 'chart' },
 ]
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`
@@ -87,6 +87,7 @@ onMounted(async () => {
         :class="{ on: props.tab === t.key }"
         @click="emit('update:tab', t.key)"
       >
+        <AppIcon :name="t.icon" :size="13" />
         {{ t.label }}
       </button>
     </div>
@@ -126,7 +127,10 @@ onMounted(async () => {
           <option :value="5">Top 5</option>
           <option :value="10">Top 10</option>
         </select>
-        <button class="btn" :disabled="searching" @click="search">{{ searching ? '…' : '检索' }}</button>
+        <button class="btn" :disabled="searching" @click="search">
+          <AppIcon name="search" :size="13" />
+          {{ searching ? '…' : '检索' }}
+        </button>
       </div>
       <p class="panel-hint">
         Top-K 原始结果，<b>不过滤阈值</b>——低于 {{ Math.round(liveThreshold * 100) }}% 的只是候选。
@@ -184,6 +188,7 @@ onMounted(async () => {
 }
 .tabs { display: flex; gap: 3px; padding: 10px 10px 8px; border-bottom: 1px solid var(--border); }
 .tab {
+  display: inline-flex; align-items: center; gap: 4px;
   border: 0; background: transparent; color: var(--muted);
   padding: 4px 10px; border-radius: var(--radius-sm);
 }

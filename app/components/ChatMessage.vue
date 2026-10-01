@@ -37,6 +37,7 @@ const emit = defineEmits<{ (e: 'cite', n: number): void }>()
         class="srcs"
         @click="emit('cite', 1)"
       >
+        <AppIcon name="link" :size="12" />
         来源 {{ props.message.usedCount ?? 0 }}/{{ props.message.sources.length }} · 点编号查看原文
       </button>
     </div>
@@ -88,6 +89,9 @@ const emit = defineEmits<{ (e: 'cite', n: number): void }>()
 }
 
 .srcs {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--muted);

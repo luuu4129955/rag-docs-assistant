@@ -58,7 +58,9 @@ function shortTime(iso: string) {
       </div>
     </div>
 
-    <button class="btn new" @click="emit('new-chat')">＋ 新对话</button>
+    <button class="btn new" @click="emit('new-chat')">
+      <AppIcon name="plus" /> 新对话
+    </button>
 
     <div class="scroll">
       <p class="label">会话</p>
@@ -76,6 +78,7 @@ function shortTime(iso: string) {
 
       <p class="label kb-label">知识库</p>
       <div v-for="d in docs" :key="d.id" class="doc">
+        <AppIcon name="file" :size="13" class="doc-i" />
         <span class="doc-n">{{ d.filename }}</span>
         <span class="doc-m num">{{ d.embeddedCount }}/{{ d.chunkCount }}</span>
       </div>
@@ -86,14 +89,16 @@ function shortTime(iso: string) {
       <p v-if="pendingCount" class="warn">还有 {{ pendingCount }} 块没向量化</p>
       <div class="foot-actions">
         <button class="btn" :disabled="uploading" @click="fileInput?.click()">
-          {{ uploading ? '解析中…' : '上传文档' }}
+          <AppIcon name="upload" />
+          {{ uploading ? '解析中…' : '上传' }}
         </button>
         <button
           class="btn"
           :disabled="embedding || !pendingCount"
           @click="emit('embed')"
         >
-          {{ embedding ? '向量化中…' : '向量化' }}
+          <AppIcon name="sparkles" />
+          {{ embedding ? '处理中…' : '向量化' }}
         </button>
       </div>
       <input
@@ -138,8 +143,12 @@ function shortTime(iso: string) {
 .conv-t { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-s { color: var(--muted); font-size: 11px; }
 
-.doc { display: flex; justify-content: space-between; gap: 8px; padding: 4px; color: var(--muted); font-size: 12px; }
-.doc-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc {
+  display: flex; align-items: center; gap: 8px; padding: 4px;
+  color: var(--muted); font-size: 12px;
+}
+.doc-i { opacity: .7; }
+.doc-n { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-m { flex: none; }
 
 .foot { border-top: 1px solid var(--border); padding: 10px 12px 12px; }

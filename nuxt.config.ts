@@ -1,7 +1,8 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
-  devtools: { enabled: true },
+  // 关掉 Nuxt DevTools：右下角那个浮标在演示时很碍事，需要时再临时开
+  devtools: { enabled: false },
   css: ['~/assets/css/main.css'],
 
   runtimeConfig: {

@@ -358,6 +358,7 @@ onMounted(async () => {
         <span class="tag">阈值 {{ threshold.toFixed(2) }}</span>
         <span v-if="toast" class="toast">{{ toast }}</span>
         <button class="btn btn-ghost side-toggle" @click="focusMode = !focusMode">
+          <AppIcon name="panel" />
           {{ focusMode ? '显示面板' : '收起面板' }}
         </button>
       </header>
@@ -397,6 +398,7 @@ onMounted(async () => {
             @keydown.enter.exact.prevent="send"
           />
           <button class="btn btn-primary" :disabled="loading" @click="send">
+            <AppIcon name="send" />
             {{ loading ? '生成中…' : '发送' }}
           </button>
         </div>
