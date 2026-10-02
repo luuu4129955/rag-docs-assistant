@@ -131,6 +131,8 @@ export default defineEventHandler(async (event) => {
   const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')
   const topK = Number(config.ragTopK) || 6
   const threshold = Number(config.ragThreshold) || 0.35
+  const rerankOn = rerankConfigured(event)
+  const rerankThreshold = Number(config.rerankThreshold) || 0
 
   // 检索失败不该拖垮聊天：拿不到材料就退回普通对话，但原因必须留在日志里
   let candidates: RetrievedChunk[] = []
@@ -143,7 +145,11 @@ export default defineEventHandler(async (event) => {
     try {
       candidates = await retrieveChunks(event, user.id, lastUser.content, topK)
       retrievalOk = true
-      used = candidates.filter(c => Number(c.similarity) >= threshold)
+      // 有重排序分数时按它筛（向量只能看"像不像"，reranker 判断"能不能回答"）；
+      // 没标定阈值就退回向量相似度
+      used = rerankOn && rerankThreshold > 0
+        ? candidates.filter(c => Number(c.rerankScore ?? Number.NEGATIVE_INFINITY) >= rerankThreshold)
+        : candidates.filter(c => Number(c.similarity) >= threshold)
     }
     catch (e: any) {
       logEvent('chat.retrieval_failed', { userId: user.id, message: e?.message || String(e) })
@@ -164,6 +170,7 @@ export default defineEventHandler(async (event) => {
       filename: c.filename,
       idx: c.idx,
       similarity: Number(c.similarity),
+      rerankScore: c.rerankScore ?? null,
       content: c.content,
     })),
     usedCount: used.length,

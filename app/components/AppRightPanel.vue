@@ -1,6 +1,6 @@
 <script setup lang="ts">
-type Source = { n: number, filename: string, idx: number, similarity: number, content: string }
-type Hit = { id: number, filename: string, idx: number, content: string, similarity: number }
+type Source = { n: number, filename: string, idx: number, similarity: number, rerankScore?: number | null, content: string }
+type Hit = { id: number, filename: string, idx: number, content: string, similarity: number, rerankScore?: number | null }
 type EvalSummary = {
   ranAt: string
   model?: string
@@ -47,6 +47,16 @@ const searching = ref(false)
 const hits = ref<Hit[]>([])
 const searchHint = ref('')
 const liveThreshold = ref(props.threshold)
+const rerankOn = ref(false)
+const rerankThreshold = ref(0)
+
+/** 判定「会不会被采用」：启用重排序时看重排分，否则看向量分 */
+function accepted(h: Hit) {
+  if (rerankOn.value && rerankThreshold.value > 0) {
+    return (h.rerankScore ?? Number.NEGATIVE_INFINITY) >= rerankThreshold.value
+  }
+  return h.similarity >= liveThreshold.value
+}
 
 async function search() {
   const text = q.value.trim()
@@ -57,9 +67,11 @@ async function search() {
     const r = await $api('/api/search', {
       method: 'POST',
       body: { query: text, k: k.value },
-    }) as { results: Hit[], threshold: number }
+    }) as { results: Hit[], threshold: number, rerank: boolean, rerankThreshold: number }
     hits.value = r.results
     liveThreshold.value = r.threshold ?? props.threshold
+    rerankOn.value = Boolean(r.rerank)
+    rerankThreshold.value = r.rerankThreshold ?? 0
     if (!r.results.length) searchHint.value = '没有召回到任何分块——确认文档已经向量化。'
   }
   catch (e: any) {
@@ -127,7 +139,9 @@ onMounted(async () => {
           <div class="src-top">
             <span class="src-n">[{{ s.n }}]</span>
             <span class="src-f">{{ s.filename }} · 第 {{ s.idx }} 块</span>
-            <span class="src-s num">{{ pct(s.similarity) }}</span>
+            <span class="src-s num">
+              <template v-if="s.rerankScore != null">重排 {{ s.rerankScore.toFixed(3) }} · </template>{{ pct(s.similarity) }}
+            </span>
           </div>
           <p class="src-c">{{ s.content }}</p>
         </div>
@@ -154,8 +168,9 @@ onMounted(async () => {
       <p v-if="searchHint" class="hint-warn">{{ searchHint }}</p>
       <div v-for="h in hits" :key="h.id" class="hit">
         <div class="hit-top">
-          <span class="num" :class="{ good: h.similarity >= liveThreshold }">{{ pct(h.similarity) }}</span>
-          <span v-if="h.similarity < liveThreshold" class="tag">低于阈值</span>
+          <span class="num" :class="{ good: accepted(h) }">{{ pct(h.similarity) }}</span>
+          <span v-if="h.rerankScore != null" class="num rerank">重排 {{ h.rerankScore.toFixed(3) }}</span>
+          <span v-if="!accepted(h)" class="tag">不进 prompt</span>
           <span class="hit-f">{{ h.filename }} · 第 {{ h.idx }} 块</span>
         </div>
         <p class="hit-c">{{ h.content.slice(0, 140) }}{{ h.content.length > 140 ? '…' : '' }}</p>
@@ -256,6 +271,7 @@ onMounted(async () => {
 .hit-top { display: flex; align-items: baseline; gap: 6px; }
 .hit-top .num { color: var(--muted); }
 .hit-top .num.good { color: var(--ok); }
+.hit-top .rerank { color: var(--accent); }
 .hit-f { margin-left: auto; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hit-c { color: var(--muted); font-size: 11px; margin-top: 4px; line-height: 1.55; }
 

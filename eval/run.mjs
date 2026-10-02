@@ -21,6 +21,27 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const BASE = process.env.RAG_EVAL_BASE || 'http://localhost:3000'
 const VERBOSE = process.argv.includes('--verbose')
 
+// 接口现在要求登录：先用测试账号换一个 token，再逐题打
+const EMAIL = process.env.EMAIL || 'owner@docs-qa.dev'
+const PASSWORD = process.env.PASSWORD || 'DocsQA-2026-owner'
+
+async function login() {
+  const res = await fetch(`${BASE}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
+  })
+  const data = await res.json().catch(() => null)
+  const token = data?.session?.accessToken
+  if (!token) {
+    console.error('登录失败，检查 EMAIL / PASSWORD：', JSON.stringify(data).slice(0, 200))
+    process.exit(1)
+  }
+  return token
+}
+
+const TOKEN = await login()
+
 const REFUSAL_PATTERNS = /材料里没有提到|没有找到和这个问题相关|无法依据材料|材料中没有/
 const CITATION = /(?:\[(\d{1,2})\]|【(\d{1,2})】)/
 
@@ -28,7 +49,7 @@ async function ask(question) {
   const started = Date.now()
   const res = await fetch(`${BASE}/api/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
     body: JSON.stringify({ messages: [{ role: 'user', content: question }] }),
   })
 

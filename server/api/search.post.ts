@@ -1,3 +1,8 @@
+/**
+ * 检索调试接口：返回的就是聊天接口真正会用的那批分块（含重排序分数）。
+ * 之所以复用 retrieveChunks 而不是自己写一遍查询，是为了让调试面板
+ * 和线上行为完全一致——否则调出来的结果没有参考价值。
+ */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
   const body = await readBody(event)
@@ -9,26 +14,17 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'query 不能为空' })
   }
 
-  // 检索用的是"问题"的向量，必须和入库时用同一个模型
-  const [vector] = await embedTexts(event, [query])
-
-  await requireUser(event)
-  const db = supabaseAsUser(event)
-  const { data, error } = await db.rpc('match_chunks', {
-    query_embedding: JSON.stringify(vector),
-    match_count: k,
-    // 只召回自己的分块（RLS 之外的第二道保险）
-    owner: user.id,
-  })
-
-  if (error) {
-    console.error('[search] 检索失败', error)
-    throw createError({ statusCode: 500, statusMessage: '检索失败', data: error.message })
-  }
-
-  // 带上聊天接口用的阈值：调试面板不做过滤，但要让调用方知道哪些块会被采用
   const config = useRuntimeConfig(event)
-  const threshold = Number(config.ragThreshold) || 0.35
+  const results = await retrieveChunks(event, user.id, query, k)
 
-  return { query, k, threshold, results: data ?? [] }
+  return {
+    query,
+    k,
+    // 向量阈值：重排序关闭时，拒答靠它
+    threshold: Number(config.ragThreshold) || 0.35,
+    rerank: rerankConfigured(event),
+    // 重排序阈值：未标定时为 0（表示不参与判定，只看排序）
+    rerankThreshold: Number(config.rerankThreshold) || 0,
+    results,
+  }
 })

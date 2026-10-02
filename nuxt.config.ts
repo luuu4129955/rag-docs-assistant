@@ -22,6 +22,12 @@ export default defineNuxtConfig({
     // 阈值没有普适值，用页面上的「检索调试」看真实分数分布后再调
     ragTopK: 6,
     ragThreshold: 0.35,
+    // 重排序：向量先粗召回 rerankTopN 条，再用 reranker 精排到 ragTopK 条
+    // rerankThreshold 是原始分（不是 0~1 概率），要用 eval/calibrate-rerank.mjs 看分布后再定
+    rerankBase: '',
+    rerankModel: 'BAAI/bge-reranker-v2-m3',
+    rerankTopN: 20,
+    rerankThreshold: 0.1,
     // 定时任务密钥：Vercel Cron 会带着它来调用 /api/jobs/tick（也兼容 CRON_SECRET）
     jobsSecret: '',
   },
