@@ -12,6 +12,12 @@ type EvalSummary = {
   avgMs: number
   maxMs: number
 }
+type LiveMetrics = {
+  sampleSize: number
+  refusalRate: number | null
+  latency: { avgMs: number | null, p95Ms: number | null, firstTokenAvgMs: number | null, retrievalAvgMs: number | null }
+  tokens: { prompt: number, completion: number, avgPromptPerAsk: number | null }
+}
 
 const props = defineProps<{
   tab: 'src' | 'debug' | 'eval'
@@ -68,6 +74,8 @@ async function search() {
 // ---- 评测 ----
 const evalData = ref<EvalSummary | null>(null)
 const evalMissing = ref(false)
+const live = ref<LiveMetrics | null>(null)
+const liveError = ref('')
 
 onMounted(async () => {
   try {
@@ -75,6 +83,12 @@ onMounted(async () => {
   }
   catch {
     evalMissing.value = true
+  }
+  try {
+    live.value = await $api('/api/metrics/summary') as LiveMetrics
+  }
+  catch (e: any) {
+    liveError.value = e?.data?.statusMessage || '线上指标读取失败'
   }
 })
 </script>
@@ -150,8 +164,25 @@ onMounted(async () => {
 
     <!-- 评测 -->
     <div v-else class="body">
+      <p class="panel-hint">线上指标（真实流量）</p>
+      <template v-if="live && live.sampleSize">
+        <div class="metrics">
+          <div class="metric"><span class="mk">样本</span><span class="mv num">{{ live.sampleSize }}</span></div>
+          <div class="metric"><span class="mk">拒答率</span><span class="mv num">{{ live.refusalRate === null ? '-' : (live.refusalRate * 100).toFixed(0) + '%' }}</span></div>
+          <div class="metric"><span class="mk">P95 延迟</span><span class="mv num">{{ live.latency.p95Ms ? (live.latency.p95Ms / 1000).toFixed(1) + 's' : '-' }}</span></div>
+          <div class="metric"><span class="mk">首字平均</span><span class="mv num">{{ live.latency.firstTokenAvgMs ? (live.latency.firstTokenAvgMs / 1000).toFixed(1) + 's' : '-' }}</span></div>
+        </div>
+        <p class="panel-hint">
+          检索平均 {{ live.latency.retrievalAvgMs ?? '-' }}ms · 每次提问平均 {{ live.tokens.avgPromptPerAsk ?? '-' }} prompt token
+        </p>
+      </template>
+      <p v-else-if="liveError" class="panel-hint">{{ liveError }}</p>
+      <p v-else class="panel-hint">还没有线上数据，问几个问题就会出现。</p>
+
+      <hr class="sep">
+
+      <p class="panel-hint">离线评测（15 题固定集）</p>
       <template v-if="evalData">
-        <p class="panel-hint">最近一次本地跑分 · {{ evalData.ranAt }}</p>
         <div class="metrics">
           <div class="metric"><span class="mk">答出率</span><span class="mv num">{{ evalData.answered }}</span></div>
           <div class="metric"><span class="mk">引用率</span><span class="mv num">{{ evalData.cited }}</span></div>
@@ -160,7 +191,7 @@ onMounted(async () => {
         </div>
         <p class="panel-hint">
           应拒答题里只有 {{ evalData.refusedByServer }} 题是阈值拦下，其余靠模型自觉；
-          最慢一次 {{ (evalData.maxMs / 1000).toFixed(1) }}s。
+          最慢一次 {{ (evalData.maxMs / 1000).toFixed(1) }}s · 跑于 {{ evalData.ranAt }}
         </p>
       </template>
       <p v-else class="panel-hint">
@@ -245,5 +276,6 @@ onMounted(async () => {
   margin-top: 12px; padding: 8px 10px; border-radius: var(--radius);
   border: 1px dashed var(--border); color: var(--muted); font-size: 11px; line-height: 1.75;
 }
+.sep { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
 .todo-h { color: var(--text); font-weight: 600; margin-bottom: 3px; }
 </style>

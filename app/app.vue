@@ -225,7 +225,8 @@ async function send() {
           ? { Authorization: `Bearer ${auth.session.value.accessToken}` }
           : {}),
       },
-      body: JSON.stringify({ messages: payload }),
+      // 带上会话 id，线上指标才能按会话聚合
+      body: JSON.stringify({ messages: payload, conversationId: conversationId.value }),
     })
     if (res.status === 401) {
       authError.value = '登录已过期，请重新登录'

@@ -5,6 +5,49 @@ const MAX_CHARS = 4000
 // 单块进 prompt 的字数上限：块太长会挤占上下文，也更容易把噪声带进去
 const MAX_CONTEXT_CHARS = 900
 
+type MetricPayload = {
+  userId?: string
+  conversationId?: string
+  model?: string
+  retrievalMs?: number
+  firstTokenMs?: number
+  totalMs?: number
+  promptTokens?: number
+  completionTokens?: number
+  retrievedCount?: number
+  usedCount?: number
+  refused?: boolean
+  error?: string
+}
+
+/** 指标写库失败不能影响问答本身，所以整段吞掉异常，只留日志 */
+async function recordMetric(event: any, payload: MetricPayload) {
+  try {
+    const db = supabaseServer(event)
+    // supabase-js 不抛异常，错误在返回值里，必须自己看
+    const { error } = await db.from('chat_metrics').insert({
+      user_id: payload.userId ?? null,
+      conversation_id: payload.conversationId ?? null,
+      model: payload.model ?? null,
+      retrieval_ms: payload.retrievalMs ?? null,
+      first_token_ms: payload.firstTokenMs ?? null,
+      total_ms: payload.totalMs ?? null,
+      prompt_tokens: payload.promptTokens ?? null,
+      completion_tokens: payload.completionTokens ?? null,
+      retrieved_count: payload.retrievedCount ?? null,
+      used_count: payload.usedCount ?? null,
+      refused: payload.refused ?? false,
+      error: payload.error ?? null,
+    })
+    if (error) {
+      logEvent('metrics.write_failed', { message: error.message })
+    }
+  }
+  catch (e: any) {
+    logEvent('metrics.write_failed', { message: e?.message || String(e) })
+  }
+}
+
 function sseEvent(payload: unknown) {
   return `data: ${JSON.stringify(payload)}\n\n`
 }
@@ -50,11 +93,14 @@ ${context}`
 }
 
 export default defineEventHandler(async (event) => {
+  const startedAt = Date.now()
   // 先认人：没登录就没有问答，避免匿名请求把额度刷光
   const user = await requireUser(event)
+  logEvent('chat.start', { userId: user.id })
 
   const body = await readBody(event)
   const raw = Array.isArray(body?.messages) ? body.messages : []
+  const conversationId = typeof body?.conversationId === 'string' ? body.conversationId : undefined
 
   // 前端传来的内容一律不可信：过滤掉非法角色，限制条数和单条长度
   const messages = raw
@@ -90,19 +136,22 @@ export default defineEventHandler(async (event) => {
   let candidates: RetrievedChunk[] = []
   let used: RetrievedChunk[] = []
   let retrievalOk = false
+  let retrievalMs = 0
 
   if (lastUser && config.embeddingKey) {
+    const t = Date.now()
     try {
       candidates = await retrieveChunks(event, user.id, lastUser.content, topK)
       retrievalOk = true
       used = candidates.filter(c => Number(c.similarity) >= threshold)
     }
     catch (e: any) {
-      console.error('[chat] 检索失败，本轮按普通对话处理', e?.message || e)
+      logEvent('chat.retrieval_failed', { userId: user.id, message: e?.message || String(e) })
     }
+    retrievalMs = Date.now() - t
   }
   else if (lastUser && !config.embeddingKey) {
-    console.warn('[chat] 未配置 NUXT_EMBEDDING_KEY，跳过检索（回答不会带引用）')
+    logEvent('chat.retrieval_skipped', { reason: 'no_embedding_key' })
   }
 
   setHeader(event, 'Content-Type', 'text/event-stream; charset=utf-8')
@@ -125,6 +174,22 @@ export default defineEventHandler(async (event) => {
 
   // 有材料但一块都没过阈值 → 直接拒答，不花模型的钱
   if (retrievalOk && !used.length) {
+    logEvent('chat.refused', {
+      userId: user.id,
+      retrievalMs,
+      retrieved: candidates.length,
+      topSimilarity: candidates[0]?.similarity ?? null,
+    })
+    await recordMetric(event, {
+      userId: user.id,
+      conversationId,
+      model: chatModel,
+      retrievalMs,
+      totalMs: Date.now() - startedAt,
+      retrievedCount: candidates.length,
+      usedCount: 0,
+      refused: true,
+    })
     return textSseStream(
       sourceEvent,
       '文档里没有找到和这个问题相关的内容，我无法依据材料回答。可以换个说法，或者先上传相关文档。',
@@ -138,16 +203,90 @@ export default defineEventHandler(async (event) => {
   const res = await fetch(`${chatBase}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${chatKey}` },
-    body: JSON.stringify({ model: chatModel, messages: finalMessages, stream: true, temperature: 0.3 }),
+    body: JSON.stringify({
+      model: chatModel,
+      messages: finalMessages,
+      stream: true,
+      temperature: 0.3,
+      // 让上游在最后一块里带上 token 用量，指标才有的算
+      stream_options: { include_usage: true },
+    }),
   })
 
   if (!res.ok || !res.body) {
     const detail = await res.text()
-    console.error('[chat] 上游报错', res.status, detail)
+    logEvent('chat.upstream_error', { status: res.status, detail: detail.slice(0, 300) })
+    await recordMetric(event, {
+      userId: user.id,
+      conversationId,
+      model: chatModel,
+      retrievalMs,
+      totalMs: Date.now() - startedAt,
+      error: `上游 ${res.status}`,
+    })
     throw createError({ statusCode: res.status || 500, statusMessage: '模型接口调用失败', data: detail })
   }
 
   const upstream = res.body
+  const decoder = new TextDecoder()
+  let sseBuffer = ''
+  let answer = ''
+  let firstTokenMs: number | null = null
+  let usage: { prompt?: number, completion?: number } = {}
+
+  /** 一边转发一边“顺路”统计：首字延迟、token 用量、答案全文 */
+  function inspect(chunkText: string) {
+    sseBuffer += chunkText
+    const parts = sseBuffer.split('\n\n')
+    sseBuffer = parts.pop() ?? ''
+    for (const part of parts) {
+      const line = part.split('\n').find(l => l.startsWith('data: '))
+      if (!line) continue
+      const data = line.slice(6).trim()
+      if (data === '[DONE]') continue
+      try {
+        const obj = JSON.parse(data)
+        const delta = obj.choices?.[0]?.delta?.content
+        if (delta) {
+          if (firstTokenMs === null) firstTokenMs = Date.now() - startedAt
+          answer += delta
+        }
+        if (obj.usage) {
+          usage = { prompt: obj.usage.prompt_tokens, completion: obj.usage.completion_tokens }
+        }
+      }
+      catch {}
+    }
+  }
+
+  async function finish(error?: string) {
+    const totalMs = Date.now() - startedAt
+    logEvent('chat.done', {
+      userId: user.id,
+      retrievalMs,
+      firstTokenMs,
+      totalMs,
+      answerChars: answer.length,
+      retrieved: candidates.length,
+      used: used.length,
+      promptTokens: usage.prompt ?? null,
+      completionTokens: usage.completion ?? null,
+      error: error ?? null,
+    })
+    await recordMetric(event, {
+      userId: user.id,
+      conversationId,
+      model: chatModel,
+      retrievalMs,
+      firstTokenMs: firstTokenMs ?? undefined,
+      totalMs,
+      promptTokens: usage.prompt,
+      completionTokens: usage.completion,
+      retrievedCount: candidates.length,
+      usedCount: used.length,
+      error,
+    })
+  }
 
   // 先把召回结果推给前端，再把模型输出原样转发
   return new ReadableStream({
@@ -161,12 +300,15 @@ export default defineEventHandler(async (event) => {
           while (true) {
             const { done, value } = await reader.read()
             if (done) break
+            if (value) inspect(decoder.decode(value, { stream: true }))
             controller.enqueue(value)
           }
           controller.close()
+          await finish()
         }
-        catch (err) {
+        catch (err: any) {
           controller.error(err)
+          await finish(err?.message || String(err))
         }
       })()
     },
