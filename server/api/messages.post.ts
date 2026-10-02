@@ -34,7 +34,8 @@ export default defineEventHandler(async (event) => {
   }
   if (!content.trim()) throw createError({ statusCode: 400, statusMessage: 'content 不能为空' })
 
-  const db = supabaseServer(event)
+  await requireUser(event)
+  const db = supabaseAsUser(event)
 
   const insert = (payload: Record<string, unknown>) => db
     .from('messages')

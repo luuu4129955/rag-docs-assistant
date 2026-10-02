@@ -21,6 +21,10 @@ type HistoryRow = { id: number, role: string, content: string, sources?: Citatio
 
 const MAX_TURNS = 20
 
+const auth = useAuth()
+const { $api } = useNuxtApp()
+const { user: authUser, ready: authReady } = auth
+
 const messages = ref<Msg[]>([])
 const input = ref('')
 const loading = ref(false)
@@ -37,6 +41,13 @@ const sourceMsgIndex = ref(-1)
 const highlight = ref(0)
 const chatModel = ref('')
 const threshold = ref(0.45)
+
+// 登录表单
+const email = ref('')
+const password = ref('')
+const authBusy = ref(false)
+const authError = ref('')
+const authNotice = ref('')
 
 const activeTitle = computed(() =>
   conversations.value.find(c => c.id === conversationId.value)?.title || '新对话',
@@ -73,7 +84,7 @@ function flash(text: string) {
 
 async function loadHealth() {
   try {
-    const h = await $fetch<{ chatModel: string, ragThreshold: number }>('/api/health')
+    const h = await $api('/api/health') as { chatModel: string, ragThreshold: number }
     chatModel.value = h.chatModel || ''
     threshold.value = h.ragThreshold || threshold.value
   }
@@ -82,7 +93,7 @@ async function loadHealth() {
 
 async function loadDocs() {
   try {
-    docs.value = await $fetch<Doc[]>('/api/documents')
+    docs.value = await $api('/api/documents') as Doc[]
   }
   catch (e) {
     console.error('读取文档列表失败', e)
@@ -91,7 +102,7 @@ async function loadDocs() {
 
 async function loadConversations() {
   try {
-    conversations.value = await $fetch<Conversation[]>('/api/conversations')
+    conversations.value = await $api('/api/conversations') as Conversation[]
   }
   catch (e) {
     console.error('读取会话列表失败', e)
@@ -100,7 +111,7 @@ async function loadConversations() {
 
 async function loadHistory(id: string) {
   try {
-    const rows = await $fetch<HistoryRow[]>(`/api/conversations/${id}`)
+    const rows = await $api(`/api/conversations/${id}`) as HistoryRow[]
     messages.value = rows
       .filter(r => r.role === 'user' || r.role === 'assistant')
       .map((r) => {
@@ -125,10 +136,7 @@ async function loadHistory(id: string) {
 }
 
 async function createConversation() {
-  const c = await $fetch<{ id: string, title: string | null, created_at: string }>(
-    '/api/conversations',
-    { method: 'POST' },
-  )
+  const c = await $api('/api/conversations', { method: 'POST' }) as Conversation
   conversationId.value = c.id
   localStorage.setItem('conversationId', c.id)
   conversations.value = [c, ...conversations.value.filter(x => x.id !== c.id)]
@@ -154,7 +162,7 @@ async function selectConversation(id: string) {
 
 async function renameConversation(id: string, title: string) {
   try {
-    await $fetch(`/api/conversations/${id}`, { method: 'PATCH', body: { title } })
+    await $api(`/api/conversations/${id}`, { method: 'PATCH', body: { title } })
     const row = conversations.value.find(c => c.id === id)
     if (row) row.title = title
   }
@@ -166,7 +174,7 @@ async function renameConversation(id: string, title: string) {
 async function saveMessage(role: 'user' | 'assistant', content: string, citations?: Citations) {
   if (!conversationId.value || !content.trim()) return
   try {
-    await $fetch('/api/messages', {
+    await $api('/api/messages', {
       method: 'POST',
       body: { conversationId: conversationId.value, role, content, citations },
     })
@@ -207,9 +215,20 @@ async function send() {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        // 流式那条走原生 fetch，所以这里手动带上登录态
+        ...(auth.session.value?.accessToken
+          ? { Authorization: `Bearer ${auth.session.value.accessToken}` }
+          : {}),
+      },
       body: JSON.stringify({ messages: payload }),
     })
+    if (res.status === 401) {
+      authError.value = '登录已过期，请重新登录'
+      last.content = '登录已过期，请重新登录'
+      return
+    }
     if (!res.ok || !res.body) {
       last.content = `请求失败：${res.status}`
       return
@@ -277,10 +296,10 @@ async function uploadFile(file: File) {
   try {
     const form = new FormData()
     form.append('file', file)
-    const r = await $fetch<{ id: string, charCount: number, chunkCount: number }>('/api/documents', {
+    const r = await $api('/api/documents', {
       method: 'POST',
       body: form,
-    })
+    }) as { id: string, charCount: number, chunkCount: number }
     flash(`解析完成：${r.charCount} 字 / ${r.chunkCount} 块，正在向量化…`)
     await loadDocs()
     await embedAll(r.id)
@@ -299,10 +318,10 @@ async function embedAll(documentId?: string) {
   let total = 0
   try {
     for (let i = 0; i < 200; i++) {
-      const r = await $fetch<{ embedded: number, remaining: number, done: boolean }>(
-        '/api/chunks/embed',
-        { method: 'POST', body: { documentId } },
-      )
+      const r = await $api('/api/chunks/embed', {
+        method: 'POST',
+        body: { documentId },
+      }) as { embedded: number, remaining: number, done: boolean }
       total += r.embedded
       if (r.done) break
     }
@@ -318,8 +337,8 @@ async function embedAll(documentId?: string) {
   }
 }
 
-onMounted(async () => {
-  await Promise.all([loadHealth(), loadDocs(), loadConversations()])
+async function bootstrap() {
+  await Promise.all([loadDocs(), loadConversations()])
   const saved = localStorage.getItem('conversationId')
   if (saved && conversations.value.some(c => c.id === saved)) {
     conversationId.value = saved
@@ -333,11 +352,95 @@ onMounted(async () => {
   else {
     await newChat()
   }
+}
+
+async function submitAuth(mode: 'login' | 'register') {
+  authError.value = ''
+  authNotice.value = ''
+  const mail = email.value.trim()
+  if (!mail || !password.value) {
+    authError.value = '请填写邮箱和密码'
+    return
+  }
+  authBusy.value = true
+  try {
+    if (mode === 'login') {
+      await auth.login(mail, password.value)
+      password.value = ''
+      await bootstrap()
+    }
+    else {
+      const res = await auth.register(mail, password.value)
+      if (res.needsConfirm) {
+        authNotice.value = '注册成功。项目开了邮箱确认，请先去邮箱点确认链接，再回来登录。'
+      }
+      else {
+        password.value = ''
+        await bootstrap()
+      }
+    }
+  }
+  catch (e: any) {
+    authError.value = e?.data?.statusMessage || e?.message || '操作失败'
+  }
+  finally {
+    authBusy.value = false
+  }
+}
+
+async function signOut() {
+  await auth.logout()
+  messages.value = []
+  conversations.value = []
+  conversationId.value = null
+}
+
+onMounted(async () => {
+  await loadHealth()
+  await auth.restore()
+  if (authUser.value) await bootstrap()
 })
 </script>
 
 <template>
-  <div class="app">
+  <div v-if="!authReady" class="gate">
+    <p class="panel-hint">载入中…</p>
+  </div>
+
+  <div v-else-if="!authUser" class="gate">
+    <form class="login" @submit.prevent="submitAuth('login')">
+      <div class="login-brand">
+        <span class="logo">◇</span>
+        <div>
+          <p class="login-name">Docs QA</p>
+          <p class="panel-hint">文档问答助手 · 登录后只能看到自己的文档与会话</p>
+        </div>
+      </div>
+
+      <label class="field">
+        <span>邮箱</span>
+        <input v-model="email" type="email" autocomplete="username" placeholder="you@example.com">
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input v-model="password" type="password" autocomplete="current-password" placeholder="至少 6 位">
+      </label>
+
+      <p v-if="authError" class="err">{{ authError }}</p>
+      <p v-if="authNotice" class="ok">{{ authNotice }}</p>
+
+      <div class="login-actions">
+        <button class="btn btn-primary" type="submit" :disabled="authBusy">
+          {{ authBusy ? '处理中…' : '登录' }}
+        </button>
+        <button class="btn" type="button" :disabled="authBusy" @click="submitAuth('register')">
+          注册新账号
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <div v-else class="app">
     <AppSidebar
       :docs="docs"
       :conversations="conversations"
@@ -345,10 +448,12 @@ onMounted(async () => {
       :uploading="uploading"
       :embedding="embedding"
       :chat-model="chatModel"
+      :user-email="authUser.email"
       @new-chat="newChat"
       @select-chat="selectConversation"
       @upload="uploadFile"
       @embed="embedAll()"
+      @logout="signOut"
     />
 
     <main class="chat">
@@ -418,6 +523,26 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.gate { height: 100vh; display: grid; place-items: center; background: var(--bg); padding: 20px; }
+.login {
+  width: 100%; max-width: 360px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; padding: 20px; box-shadow: var(--shadow-window);
+}
+.login-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.login-brand .logo { font-size: 20px; color: var(--accent); }
+.login-name { font-weight: 600; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.field input {
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-2); font-size: 13px; color: var(--text);
+}
+.login-actions { display: flex; gap: 8px; margin-top: 4px; }
+.login-actions .btn { flex: 1 1 0; }
+.err { color: var(--danger); font-size: 12px; }
+.ok { color: var(--ok); font-size: 12px; }
+
 .app {
   height: 100vh;
   display: flex;

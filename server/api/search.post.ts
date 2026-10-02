@@ -1,4 +1,5 @@
 export default defineEventHandler(async (event) => {
+  const user = await requireUser(event)
   const body = await readBody(event)
   const query = typeof body?.query === 'string' ? body.query.trim() : ''
   const rawK = Number(body?.k)
@@ -11,10 +12,13 @@ export default defineEventHandler(async (event) => {
   // 检索用的是"问题"的向量，必须和入库时用同一个模型
   const [vector] = await embedTexts(event, [query])
 
-  const db = supabaseServer(event)
+  await requireUser(event)
+  const db = supabaseAsUser(event)
   const { data, error } = await db.rpc('match_chunks', {
     query_embedding: JSON.stringify(vector),
     match_count: k,
+    // 只召回自己的分块（RLS 之外的第二道保险）
+    owner: user.id,
   })
 
   if (error) {

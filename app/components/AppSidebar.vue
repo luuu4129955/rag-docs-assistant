@@ -15,6 +15,7 @@ const props = defineProps<{
   uploading?: boolean
   embedding?: boolean
   chatModel?: string
+  userEmail?: string
 }>()
 
 const emit = defineEmits<{
@@ -22,6 +23,7 @@ const emit = defineEmits<{
   (e: 'select-chat', id: string): void
   (e: 'upload', file: File): void
   (e: 'embed'): void
+  (e: 'logout'): void
 }>()
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -101,6 +103,10 @@ function shortTime(iso: string) {
           {{ embedding ? '处理中…' : '向量化' }}
         </button>
       </div>
+      <div class="me">
+        <span class="me-mail" :title="props.userEmail">{{ props.userEmail || '未登录' }}</span>
+        <button class="btn-ghost me-out" @click="emit('logout')">退出</button>
+      </div>
       <input
         ref="fileInput"
         class="hide"
@@ -158,5 +164,15 @@ function shortTime(iso: string) {
 }
 .foot-actions { display: flex; gap: 6px; }
 .foot-actions .btn { flex: 1 1 0; }
+.me {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px;
+  font-size: 11px; color: var(--muted);
+}
+.me-mail { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.me-out {
+  flex: none; border: 0; background: transparent; color: var(--muted);
+  padding: 2px 6px; border-radius: var(--radius-sm); font-size: 11px;
+}
+.me-out:hover { background: var(--surface-2); color: var(--text); }
 .hide { display: none; }
 </style>

@@ -24,6 +24,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'update:tab', tab: 'src' | 'debug' | 'eval'): void }>()
 
+const { $api } = useNuxtApp()
+
 const tabs = [
   { key: 'src' as const, label: '来源', icon: 'link' },
   { key: 'debug' as const, label: '检索调试', icon: 'search' },
@@ -46,10 +48,10 @@ async function search() {
   searching.value = true
   searchHint.value = ''
   try {
-    const r = await $fetch<{ results: Hit[], threshold: number }>('/api/search', {
+    const r = await $api('/api/search', {
       method: 'POST',
       body: { query: text, k: k.value },
-    })
+    }) as { results: Hit[], threshold: number }
     hits.value = r.results
     liveThreshold.value = r.threshold ?? props.threshold
     if (!r.results.length) searchHint.value = '没有召回到任何分块——确认文档已经向量化。'
@@ -69,7 +71,7 @@ const evalMissing = ref(false)
 
 onMounted(async () => {
   try {
-    evalData.value = await $fetch<EvalSummary>('/api/eval/latest')
+    evalData.value = await $api('/api/eval/latest') as EvalSummary
   }
   catch {
     evalMissing.value = true

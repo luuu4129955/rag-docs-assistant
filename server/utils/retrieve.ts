@@ -13,16 +13,20 @@ export type RetrievedChunk = {
 
 export async function retrieveChunks(
   event: any,
+  owner: string,
   query: string,
   k: number,
 ): Promise<RetrievedChunk[]> {
   // 问题和分块必须用同一个模型向量化，否则两个向量不在同一个空间里
   const [vector] = await embedTexts(event, [query])
-  const db = supabaseServer(event)
+  // 用「用户身份」的客户端：RLS 会保证只能召回自己的文档分块
+  const db = supabaseAsUser(event)
 
   const { data, error } = await db.rpc('match_chunks', {
     query_embedding: JSON.stringify(vector),
     match_count: k,
+    // 显式限定归属：RLS 是第一道，这里是第二道，防止任何配置疏漏导致跨用户召回
+    owner,
   })
 
   if (error) {

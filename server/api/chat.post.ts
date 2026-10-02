@@ -50,6 +50,9 @@ ${context}`
 }
 
 export default defineEventHandler(async (event) => {
+  // 先认人：没登录就没有问答，避免匿名请求把额度刷光
+  const user = await requireUser(event)
+
   const body = await readBody(event)
   const raw = Array.isArray(body?.messages) ? body.messages : []
 
@@ -90,7 +93,7 @@ export default defineEventHandler(async (event) => {
 
   if (lastUser && config.embeddingKey) {
     try {
-      candidates = await retrieveChunks(event, lastUser.content, topK)
+      candidates = await retrieveChunks(event, user.id, lastUser.content, topK)
       retrievalOk = true
       used = candidates.filter(c => Number(c.similarity) >= threshold)
     }

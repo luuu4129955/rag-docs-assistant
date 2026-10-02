@@ -5,23 +5,36 @@ const BATCH_SIZE = 16
 export default defineEventHandler(async (event) => {
   const body = await readBody(event).catch(() => ({}))
   const documentId = typeof body?.documentId === 'string' && body.documentId ? body.documentId : null
-  const db = supabaseServer(event)
+  const user = await requireUser(event)
+  const db = supabaseAsUser(event)
+
+  // 只处理自己的文档：分块表本身没有 user_id，靠文档归属划范围
+  const { data: ownedDocs } = await db.from('documents').select('id').eq('user_id', user.id)
+  const ownedIds = (ownedDocs ?? []).map(d => d.id)
+  if (documentId && !ownedIds.includes(documentId)) {
+    throw createError({ statusCode: 404, statusMessage: '文档不存在' })
+  }
+  const scope = documentId ? [documentId] : ownedIds
+  if (!scope.length) {
+    return { embedded: 0, remaining: 0, done: true }
+  }
 
   const buildQuery = () => {
-    let q = db
+    return db
       .from('chunks')
       .select('id, content')
       .is('embedding', null)
+      .in('document_id', scope)
       .order('id', { ascending: true })
       .limit(BATCH_SIZE)
-    if (documentId) q = q.eq('document_id', documentId)
-    return q
   }
 
   const countRemaining = async () => {
-    let q = db.from('chunks').select('id', { count: 'exact', head: true }).is('embedding', null)
-    if (documentId) q = q.eq('document_id', documentId)
-    const { count } = await q
+    const { count } = await db
+      .from('chunks')
+      .select('id', { count: 'exact', head: true })
+      .is('embedding', null)
+      .in('document_id', scope)
     return count ?? 0
   }
 

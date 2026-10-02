@@ -7,7 +7,8 @@ export default defineEventHandler(async (event) => {
   const title = typeof body?.title === 'string' ? body.title.trim().slice(0, 60) : ''
   if (!title) throw createError({ statusCode: 400, statusMessage: 'title 不能为空' })
 
-  const db = supabaseServer(event)
+  await requireUser(event)
+  const db = supabaseAsUser(event)
   const { data, error } = await db
     .from('conversations')
     .update({ title })

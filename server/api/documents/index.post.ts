@@ -57,11 +57,15 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const db = supabaseServer(event)
+  const user = await requireUser(event)
+  const db = supabaseAsUser(event)
+  // 私有桶没有面向普通用户的策略，存储走管理端客户端；
+  // 归属靠「路径前缀 = 用户 id」+ 数据库 user_id 双重对应
+  const storage = supabaseServer(event)
 
-  // 存储键用随机名，避免中文/空格/重名带来的麻烦；原始文件名存在数据库里
-  const storagePath = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`
-  const { error: uploadError } = await db.storage
+  // 存储键 = 用户目录 + 随机名：原始文件名可能有中文、空格、重名，真名存在数据库里
+  const storagePath = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`
+  const { error: uploadError } = await storage.storage
     .from('docs')
     .upload(storagePath, file.data, {
       contentType: file.type || 'application/octet-stream',
@@ -76,6 +80,7 @@ export default defineEventHandler(async (event) => {
   const { data: doc, error: docError } = await db
     .from('documents')
     .insert({
+      user_id: user.id,
       filename,
       storage_path: storagePath,
       size_bytes: file.data.length,
@@ -87,8 +92,9 @@ export default defineEventHandler(async (event) => {
   if (docError || !doc) {
     console.error('[documents] 写入文档记录失败', docError)
     // 补偿：把已经传上去的文件删掉，避免留下无主文件
-    await db.storage.from('docs').remove([storagePath])
-    throw createError({ statusCode: 500, statusMessage: '写入文档记录失败', data: docError?.message })
+    await storage.storage.from('docs').remove([storagePath])
+    const hint = /user_id/.test(docError?.message ?? '') ? '（数据库还没执行 sql/01-auth-rls.sql）' : ''
+    throw createError({ statusCode: 500, statusMessage: `写入文档记录失败${hint}`, data: docError?.message })
   }
 
   const { error: chunkError } = await db.from('chunks').insert(
@@ -104,7 +110,7 @@ export default defineEventHandler(async (event) => {
     console.error('[documents] 写入分块失败', chunkError)
     // 补偿：级联删除会带走已写入的分块，存储里的文件也一并清理
     await db.from('documents').delete().eq('id', doc.id)
-    await db.storage.from('docs').remove([storagePath])
+    await storage.storage.from('docs').remove([storagePath])
     throw createError({ statusCode: 500, statusMessage: '写入分块失败', data: chunkError.message })
   }
 

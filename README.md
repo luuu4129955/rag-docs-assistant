@@ -72,6 +72,8 @@ NUXT_CHAT_MODEL=Qwen/Qwen2.5-7B-Instruct
 
 ## 数据库
 
+### 第一步：建表
+
 ```sql
 create extension if not exists vector;
 
@@ -115,6 +117,36 @@ create table chunks (
 create index chunks_document_idx on chunks (document_id, idx);
 create index chunks_embedding_idx on chunks using hnsw (embedding vector_cosine_ops);
 ```
+
+### 第二步：鉴权与数据隔离
+
+执行 `sql/01-auth-rls.sql`（可重复执行）。它会做四件事：
+
+1. 给 `conversations` / `documents` 两张根表加 `user_id`
+2. 给四张表打开行级安全（RLS）
+3. 建策略：根表比对 `auth.uid()`，`messages` / `chunks` 沿着外键回到根表比对
+4. 把检索函数声明成 `security invoker`，保证 RLS 对检索同样生效
+
+> 老数据的 `user_id` 为空，跑完迁移后谁都看不见。要认领给某个账号，
+> 去 Authentication → Users 复制 UID，执行迁移脚本末尾注释里的两条 `update`。
+
+### 登录是怎么走的
+
+```
+浏览器 ──POST /api/auth/login──▶ 服务端 ──signInWithPassword──▶ Supabase Auth
+   ▲                                │
+   └──────── access/refresh token ──┘
+
+之后每个业务请求都带 Authorization: Bearer <access_token>
+服务端用它调 auth.getUser() 验签 → 拿到 user.id
+数据库查询用「带用户 token 的客户端」发出 → PostgREST 按该身份执行 → RLS 生效
+```
+
+几个刻意的选择：
+
+- **不在浏览器里放任何 Supabase 密钥**：登录由服务端代理，前端只持有我们签发的 token
+- **隔离靠数据库而不是靠代码**：每条查询都要记得加 `where user_id = ?` 太容易漏，RLS 是兜底
+- 服务端仍持有 service key，但只用于两件事：校验登录态、读写存储桶
 
 检索走一个数据库函数，把「算相似度 + 排序 + 取前 K」放在数据所在的地方做：
 
