@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 评测集规范性校验
+        run: node eval/check-set.mjs
+
+      - name: 生产构建
+        run: pnpm build
+
+      # 构建能过不代表服务能起来，所以再真的启动一次、打一下自检接口。
+      # 这一步不需要任何密钥：/api/health 只报告「配置了没有」。
+      - name: 启动冒烟测试
+        run: |
+          node .output/server/index.mjs &
+          SERVER_PID=$!
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/api/health > /tmp/health.json; then
+              break
+            fi
+            sleep 1
+          done
+          cat /tmp/health.json
+          grep -q "supabaseUrl" /tmp/health.json
+          kill $SERVER_PID

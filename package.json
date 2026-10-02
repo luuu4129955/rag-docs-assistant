@@ -9,6 +9,8 @@
     "build": "nuxt build",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
+    "check:eval-set": "node eval/check-set.mjs",
+    "verify": "pnpm check:eval-set && pnpm build",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
   },
