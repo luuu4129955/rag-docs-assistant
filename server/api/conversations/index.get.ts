@@ -14,7 +14,7 @@ export default defineEventHandler(async (event) => {
 
   if (error) {
     console.error('[conversations] 读取列表失败', error)
-    const hint = /user_id/.test(error.message ?? '') ? '（数据库还没执行 sql/01-auth-rls.sql）' : ''
+    const hint = /user_id|status/.test(error.message ?? '') ? '（数据库还没执行 sql/01-auth-rls.sql 或 sql/02-jobs.sql）' : ''
     throw createError({ statusCode: 500, statusMessage: `读取会话列表失败${hint}`, data: error.message })
   }
 

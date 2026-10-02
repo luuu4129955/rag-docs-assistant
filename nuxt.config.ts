@@ -22,5 +22,7 @@ export default defineNuxtConfig({
     // 阈值没有普适值，用页面上的「检索调试」看真实分数分布后再调
     ragTopK: 6,
     ragThreshold: 0.35,
+    // 定时任务密钥：Vercel Cron 会带着它来调用 /api/jobs/tick（也兼容 CRON_SECRET）
+    jobsSecret: '',
   },
 })

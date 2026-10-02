@@ -59,6 +59,29 @@ pnpm dev
 | `NUXT_SUPABASE_SERVICE_KEY` | Supabase secret key，仅服务端使用 |
 | `NUXT_RAG_TOP_K` | 每次检索取回几块，默认 6 |
 | `NUXT_RAG_THRESHOLD` | 拒答阈值，默认 0.35 |
+| `NUXT_JOBS_SECRET` | 后台任务密钥，定时任务带它调用 `/api/jobs/tick`（也兼容 Vercel 的 `CRON_SECRET`） |
+
+## 上传与向量化：为什么是后台任务
+
+上传接口现在只做两件便宜的事：把文件存进桶、写一条 `status = pending` 的记录，然后立刻返回。
+解析、分块、向量化交给 `/api/jobs/tick` 分轮执行——它一次只解析 1 份、向量化 16 块，
+为的是不撞 Serverless 函数 10 秒的超时上限。
+
+```
+上传 ──▶ documents.status = pending ──▶ tick：解析+分块 ──▶ status = embedding
+                                            │
+                                            └─▶ tick：向量化 16 块 ──▶ status = ready
+                                                                    （出错则 failed + error）
+```
+
+三条驱动路径，任选其一都能推进：
+
+- 前端轮询（本地开发默认）：上传后循环调用 `tick`，处理完自动停
+- 页面上的「继续处理」按钮：上次没跑完的手动接着跑
+- 定时任务：`vercel.json` 里配了每分钟一次，用户关掉页面也能继续
+
+幂等性靠两处保证：解析前先删掉该文档的旧分块再重写；向量化只挑 `embedding is null` 的行。
+所以同一个文档重复处理不会产生重复数据。
 
 聊天模型只要是 OpenAI 兼容接口就能换。例如 DeepSeek 余额用尽时，可以直接借道硅基流动的免费模型继续开发：
 
@@ -175,6 +198,7 @@ $$;
 - [x] 带引用的回答与拒答
 - [x] 引用结果随消息持久化（刷新后仍能看引用）
 - [x] 评测集与评测脚本（`eval/`，覆盖答出率 / 引用率 / 拒答率 / 延迟）
+- [x] 上传与向量化转后台任务（状态可查、可续跑、定时任务兜底）
 - [ ] 评测面板 UI（把 `eval/` 的结果搬到页面上）
 - [ ] 混合检索（关键词 + 向量）
 - [ ] 重排序（Rerank）

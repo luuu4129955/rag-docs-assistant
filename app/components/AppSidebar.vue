@@ -5,6 +5,8 @@ type Doc = {
   char_count: number | null
   chunkCount: number
   embeddedCount: number
+  status?: string
+  error?: string | null
 }
 type Conversation = { id: string, title: string | null, created_at: string }
 
@@ -22,7 +24,7 @@ const emit = defineEmits<{
   (e: 'new-chat'): void
   (e: 'select-chat', id: string): void
   (e: 'upload', file: File): void
-  (e: 'embed'): void
+  (e: 'process'): void
   (e: 'logout'): void
 }>()
 
@@ -31,6 +33,17 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const pendingCount = computed(() =>
   props.docs.reduce((sum, d) => sum + Math.max(0, d.chunkCount - d.embeddedCount), 0),
 )
+
+const busy = computed(() =>
+  props.docs.some(d => d.status === 'pending' || d.status === 'embedding'),
+)
+
+function statusOf(d: Doc) {
+  if (d.status === 'failed') return { text: '失败', cls: 'bad', title: d.error || '' }
+  if (d.status === 'pending') return { text: '待解析', cls: 'wait', title: '已上传，等后台任务处理' }
+  if (d.status === 'embedding') return { text: '向量化中', cls: 'wait', title: '' }
+  return { text: '就绪', cls: 'ok', title: '' }
+}
 
 function onPick(e: Event) {
   const input = e.target as HTMLInputElement
@@ -81,8 +94,13 @@ function shortTime(iso: string) {
       <p class="label kb-label">知识库</p>
       <div v-for="d in docs" :key="d.id" class="doc">
         <AppIcon name="file" :size="13" class="doc-i" />
-        <span class="doc-n">{{ d.filename }}</span>
-        <span class="doc-m num">{{ d.embeddedCount }}/{{ d.chunkCount }}</span>
+        <span class="doc-col">
+          <span class="doc-n" :title="d.filename">{{ d.filename }}</span>
+          <span class="doc-state" :class="statusOf(d).cls" :title="statusOf(d).title">
+            {{ statusOf(d).text }}
+            <template v-if="d.chunkCount">· 向量 {{ d.embeddedCount }}/{{ d.chunkCount }}</template>
+          </span>
+        </span>
       </div>
       <p v-if="!docs.length" class="label empty">还没有文档</p>
     </div>
@@ -96,11 +114,11 @@ function shortTime(iso: string) {
         </button>
         <button
           class="btn"
-          :disabled="embedding || !pendingCount"
-          @click="emit('embed')"
+          :disabled="embedding || (!pendingCount && !busy)"
+          @click="emit('process')"
         >
           <AppIcon name="sparkles" />
-          {{ embedding ? '处理中…' : '向量化' }}
+          {{ embedding ? '处理中…' : (busy ? '继续处理' : '向量化') }}
         </button>
       </div>
       <div class="me">
@@ -154,8 +172,12 @@ function shortTime(iso: string) {
   color: var(--muted); font-size: 12px;
 }
 .doc-i { opacity: .7; }
-.doc-n { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.doc-m { flex: none; }
+.doc-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.doc-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-state { font-size: 10px; color: var(--muted); }
+.doc-state.ok { color: var(--ok); }
+.doc-state.wait { color: var(--accent); }
+.doc-state.bad { color: var(--danger); }
 
 .foot { border-top: 1px solid var(--border); padding: 10px 12px 12px; }
 .warn {

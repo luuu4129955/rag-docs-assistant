@@ -15,6 +15,8 @@ type Doc = {
   char_count: number | null
   chunkCount: number
   embeddedCount: number
+  status?: string
+  error?: string | null
 }
 type Conversation = { id: string, title: string | null, created_at: string }
 type HistoryRow = { id: number, role: string, content: string, sources?: Citations | null }
@@ -33,6 +35,7 @@ const conversations = ref<Conversation[]>([])
 const docs = ref<Doc[]>([])
 const uploading = ref(false)
 const embedding = ref(false)
+const processing = ref(false)
 const toast = ref('')
 
 const rightTab = ref<'src' | 'debug' | 'eval'>('src')
@@ -299,10 +302,10 @@ async function uploadFile(file: File) {
     const r = await $api('/api/documents', {
       method: 'POST',
       body: form,
-    }) as { id: string, charCount: number, chunkCount: number }
-    flash(`解析完成：${r.charCount} 字 / ${r.chunkCount} 块，正在向量化…`)
+    }) as { id: string, status: string }
+    flash('已上传，正在后台解析与向量化…')
     await loadDocs()
-    await embedAll(r.id)
+    await processPending()
   }
   catch (e: any) {
     const brief = e?.data?.statusMessage || e?.message || '未知错误'
@@ -313,26 +316,36 @@ async function uploadFile(file: File) {
   }
 }
 
-async function embedAll(documentId?: string) {
+/**
+ * 驱动后台任务：每轮只处理一小批（服务端限制），处理完接着下一轮。
+ * 之所以放在前端驱动，是为了不依赖平台特有的队列；线上还可以叠加 Vercel Cron 兜底。
+ */
+async function processPending() {
+  if (processing.value) return
+  processing.value = true
   embedding.value = true
-  let total = 0
   try {
-    for (let i = 0; i < 200; i++) {
-      const r = await $api('/api/chunks/embed', {
-        method: 'POST',
-        body: { documentId },
-      }) as { embedded: number, remaining: number, done: boolean }
-      total += r.embedded
-      if (r.done) break
+    for (let i = 0; i < 120; i++) {
+      const r = await $api('/api/jobs/tick', { method: 'POST' }) as {
+        parsed: number
+        embedded: number
+        remaining: number
+        done: boolean
+      }
+      await loadDocs()
+      if (r.done) {
+        flash(`处理完成：本轮解析 ${r.parsed} 份、向量化 ${r.embedded} 块`)
+        break
+      }
+      await new Promise(resolve => setTimeout(resolve, 800))
     }
-    flash(`向量化完成：本次处理 ${total} 块`)
-    await loadDocs()
   }
   catch (e: any) {
     const brief = e?.data?.statusMessage || e?.message || '未知错误'
-    flash(`向量化失败：${brief}`)
+    flash(`后台处理失败：${brief}`)
   }
   finally {
+    processing.value = false
     embedding.value = false
   }
 }
@@ -351,6 +364,11 @@ async function bootstrap() {
   }
   else {
     await newChat()
+  }
+
+  // 上次没处理完的（关页面、断网）在这里接着跑
+  if (docs.value.some(d => d.status === 'pending' || d.status === 'embedding')) {
+    processPending()
   }
 }
 
@@ -452,7 +470,7 @@ onMounted(async () => {
       @new-chat="newChat"
       @select-chat="selectConversation"
       @upload="uploadFile"
-      @embed="embedAll()"
+      @process="processPending"
       @logout="signOut"
     />
 
