@@ -131,11 +131,54 @@ export default defineEventHandler(async (event) => {
   }
 
   // 检索只关心「这一轮问了什么」，用最后一条用户消息当查询
-  const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')
   const topK = Number(config.ragTopK) || 6
   const threshold = Number(config.ragThreshold) || 0.35
   const rerankOn = rerankConfigured(event)
   const rerankThreshold = Number(config.rerankThreshold) || 0
+
+  const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')
+
+  setHeader(event, 'Content-Type', 'text/event-stream; charset=utf-8')
+  setHeader(event, 'Cache-Control', 'no-cache')
+
+  // ---------- 答案缓存：放在检索之前 ----------
+  // 命中时整条链路（向量化 → 检索 → 重排 → 模型）全部跳过，这才是缓存的意义；
+  // 放在检索之后只能省下模型调用那一段，收益小得多。
+  const cacheOn = String(config.answerCache ?? true) !== 'false'
+  const ttlDays = Number(config.cacheTtlDays) || 7
+  let cacheKey = ''
+  if (cacheOn && lastUser) {
+    const version = await corpusVersion(event, user.id)
+    cacheKey = cacheKeyOf([
+      user.id, chatModel, threshold, rerankThreshold, topK, version,
+      normalizeQuestion(lastUser.content),
+    ])
+    const cached = await readAnswerCache(event, cacheKey, ttlDays)
+    if (cached) {
+      logEvent('chat.cache_hit', { userId: user.id, answerChars: cached.answer.length })
+      // 指标写入不挡在返回之前：用户先拿到答案，统计晚一点无所谓
+      void recordMetric(event, {
+        userId: user.id,
+        conversationId,
+        model: chatModel,
+        totalMs: Date.now() - startedAt,
+        retrievedCount: cached.sources.length,
+        usedCount: cached.usedCount,
+        cached: true,
+      })
+      return textSseStream(
+        sseEvent({
+          sources: cached.sources,
+          usedCount: cached.usedCount,
+          retrieved: true,
+          threshold,
+          model: chatModel,
+          cached: true,
+        }),
+        cached.answer,
+      )
+    }
+  }
 
   // 检索失败不该拖垮聊天：拿不到材料就退回普通对话，但原因必须留在日志里
   let candidates: RetrievedChunk[] = []
@@ -163,9 +206,6 @@ export default defineEventHandler(async (event) => {
     logEvent('chat.retrieval_skipped', { reason: 'no_embedding_key' })
   }
 
-  setHeader(event, 'Content-Type', 'text/event-stream; charset=utf-8')
-  setHeader(event, 'Cache-Control', 'no-cache')
-
   // 先把召回结果发给前端：引用列表要显示，且必须在正文之前到达
   const sourcePayload = candidates.map((c, i) => ({
     n: i + 1,
@@ -185,43 +225,6 @@ export default defineEventHandler(async (event) => {
     threshold,
     model: chatModel,
   })
-
-  // ---------- 答案缓存：同一问题 + 同一语料 + 同一参数 → 直接复用 ----------
-  const cacheOn = String(config.answerCache ?? true) !== 'false'
-  const ttlDays = Number(config.cacheTtlDays) || 7
-  let cacheKey = ''
-  if (cacheOn && used.length && lastUser) {
-    const version = await corpusVersion(event, user.id)
-    cacheKey = cacheKeyOf([
-      user.id, chatModel, threshold, rerankThreshold, topK, version,
-      normalizeQuestion(lastUser.content),
-    ])
-    const cached = await readAnswerCache(event, cacheKey, ttlDays)
-    if (cached) {
-      logEvent('chat.cache_hit', { userId: user.id, answerChars: cached.answer.length })
-      await recordMetric(event, {
-        userId: user.id,
-        conversationId,
-        model: chatModel,
-        retrievalMs,
-        totalMs: Date.now() - startedAt,
-        retrievedCount: candidates.length,
-        usedCount: cached.usedCount,
-        cached: true,
-      })
-      return textSseStream(
-        sseEvent({
-          sources: cached.sources,
-          usedCount: cached.usedCount,
-          retrieved: true,
-          threshold,
-          model: chatModel,
-          cached: true,
-        }),
-        cached.answer,
-      )
-    }
-  }
 
   // 有材料但一块都没过阈值 → 直接拒答，不花模型的钱
   if (retrievalOk && !used.length) {
