@@ -30,6 +30,14 @@ export default defineNuxtConfig({
     rerankThreshold: 0.1,
     // 混合检索：向量 + 关键词两路，用 RRF 融合（要靠 sql/04-hybrid.sql 建的关键词函数）
     hybridEnabled: true,
+    // 缓存：embedding 缓存按「文本哈希」复用；答案缓存按「问题 + 语料版本 + 参数」复用
+    embeddingCache: true,
+    answerCache: true,
+    cacheTtlDays: 7,
+    // 成本估算：每百万 token 的价格（元）。默认 0 = 不显示成本（用的是免费模型）
+    // 换成 DeepSeek 时可以填 2 / 8 之类，面板就会显示估算成本
+    priceInPerM: 0,
+    priceOutPerM: 0,
     // 定时任务密钥：Vercel Cron 会带着它来调用 /api/jobs/tick（也兼容 CRON_SECRET）
     jobsSecret: '',
   },

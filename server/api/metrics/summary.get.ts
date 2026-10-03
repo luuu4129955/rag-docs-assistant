@@ -10,7 +10,7 @@ export default defineEventHandler(async (event) => {
 
   const { data, error } = await db
     .from('chat_metrics')
-    .select('retrieval_ms, first_token_ms, total_ms, prompt_tokens, completion_tokens, retrieved_count, used_count, refused, created_at')
+    .select('retrieval_ms, first_token_ms, total_ms, prompt_tokens, completion_tokens, retrieved_count, used_count, refused, cached, created_at')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
     .limit(500)
@@ -36,8 +36,14 @@ export default defineEventHandler(async (event) => {
   const first = nums(rows.map(r => r.first_token_ms))
   const retrieval = nums(rows.map(r => r.retrieval_ms))
   const refusedCount = rows.filter(r => r.refused).length
-  const promptTokens = rows.reduce((s, r) => s + (r.prompt_tokens ?? 0), 0)
-  const completionTokens = rows.reduce((s, r) => s + (r.completion_tokens ?? 0), 0)
+  const cachedCount = rows.filter(r => r.cached).length
+  const config = useRuntimeConfig(event)
+  const priceIn = Number(config.priceInPerM) || 0
+  const priceOut = Number(config.priceOutPerM) || 0
+  // 命中缓存的那一轮没有真实模型调用，不能算进 token 与成本
+  const billed = rows.filter(r => !r.cached)
+  const promptTokens = billed.reduce((s, r) => s + (r.prompt_tokens ?? 0), 0)
+  const completionTokens = billed.reduce((s, r) => s + (r.completion_tokens ?? 0), 0)
 
   return {
     sampleSize: rows.length,
@@ -51,10 +57,17 @@ export default defineEventHandler(async (event) => {
       firstTokenAvgMs: mean(first),
       retrievalAvgMs: mean(retrieval),
     },
+    cache: {
+      hits: cachedCount,
+      hitRate: rows.length ? Number((cachedCount / rows.length).toFixed(3)) : null,
+    },
     tokens: {
       prompt: promptTokens,
       completion: completionTokens,
-      avgPromptPerAsk: rows.length ? Math.round(promptTokens / rows.length) : null,
+      avgPromptPerAsk: billed.length ? Math.round(promptTokens / billed.length) : null,
+      // 按配置单价估算（默认 0 表示用的免费模型）
+      estimatedCost: Number(((promptTokens / 1e6) * priceIn + (completionTokens / 1e6) * priceOut).toFixed(4)),
+      currency: 'CNY',
     },
   }
 })

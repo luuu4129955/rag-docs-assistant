@@ -16,7 +16,8 @@ type LiveMetrics = {
   sampleSize: number
   refusalRate: number | null
   latency: { avgMs: number | null, p95Ms: number | null, firstTokenAvgMs: number | null, retrievalAvgMs: number | null }
-  tokens: { prompt: number, completion: number, avgPromptPerAsk: number | null }
+  cache: { hits: number, hitRate: number | null }
+  tokens: { prompt: number, completion: number, avgPromptPerAsk: number | null, estimatedCost: number, currency: string }
 }
 
 const props = defineProps<{
@@ -198,9 +199,17 @@ defineExpose({ refreshMetrics })
           <div class="metric"><span class="mk">拒答率</span><span class="mv num">{{ live.refusalRate === null ? '-' : (live.refusalRate * 100).toFixed(0) + '%' }}</span></div>
           <div class="metric"><span class="mk">P95 延迟</span><span class="mv num">{{ live.latency.p95Ms ? (live.latency.p95Ms / 1000).toFixed(1) + 's' : '-' }}</span></div>
           <div class="metric"><span class="mk">首字平均</span><span class="mv num">{{ live.latency.firstTokenAvgMs ? (live.latency.firstTokenAvgMs / 1000).toFixed(1) + 's' : '-' }}</span></div>
+          <div class="metric"><span class="mk">缓存命中</span><span class="mv num">{{ live.cache.hitRate === null ? '-' : (live.cache.hitRate * 100).toFixed(0) + '%' }}</span></div>
+          <div class="metric">
+            <span class="mk">累计成本</span>
+            <span class="mv num">
+              {{ live.tokens.estimatedCost > 0 ? `¥${live.tokens.estimatedCost}` : '免费额度' }}
+            </span>
+          </div>
         </div>
         <p class="panel-hint">
           检索平均 {{ live.latency.retrievalAvgMs ?? '-' }}ms · 每次提问平均 {{ live.tokens.avgPromptPerAsk ?? '-' }} prompt token
+          · 缓存命中 {{ live.cache.hits }} 次
         </p>
       </template>
       <p v-else-if="liveError" class="panel-hint">{{ liveError }}</p>

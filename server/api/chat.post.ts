@@ -1,5 +1,6 @@
-import type { RetrievedChunk } from '../../utils/retrieve'
-import type { ContextBlock } from '../../utils/context'
+import type { RetrievedChunk } from '../utils/retrieve'
+import type { ContextBlock } from '../utils/context'
+import { cacheKeyOf, corpusVersion, normalizeQuestion, readAnswerCache, writeAnswerCache } from '../utils/answer-cache'
 
 const MAX_TURNS = 20
 const MAX_CHARS = 4000
@@ -16,6 +17,7 @@ type MetricPayload = {
   retrievedCount?: number
   usedCount?: number
   refused?: boolean
+  cached?: boolean
   error?: string
 }
 
@@ -36,6 +38,7 @@ async function recordMetric(event: any, payload: MetricPayload) {
       retrieved_count: payload.retrievedCount ?? null,
       used_count: payload.usedCount ?? null,
       refused: payload.refused ?? false,
+      cached: payload.cached ?? false,
       error: payload.error ?? null,
     })
     if (error) {
@@ -164,22 +167,61 @@ export default defineEventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'no-cache')
 
   // 先把召回结果发给前端：引用列表要显示，且必须在正文之前到达
+  const sourcePayload = candidates.map((c, i) => ({
+    n: i + 1,
+    filename: c.filename,
+    idx: c.idx,
+    similarity: Number(c.similarity),
+    rerankScore: c.rerankScore ?? null,
+    keywordHits: c.keywordHits ?? null,
+    foundBy: c.foundBy ?? null,
+    content: c.content,
+  }))
+
   const sourceEvent = sseEvent({
-    sources: candidates.map((c, i) => ({
-      n: i + 1,
-      filename: c.filename,
-      idx: c.idx,
-      similarity: Number(c.similarity),
-      rerankScore: c.rerankScore ?? null,
-      keywordHits: c.keywordHits ?? null,
-      foundBy: c.foundBy ?? null,
-      content: c.content,
-    })),
+    sources: sourcePayload,
     usedCount: used.length,
     retrieved: retrievalOk,
     threshold,
     model: chatModel,
   })
+
+  // ---------- 答案缓存：同一问题 + 同一语料 + 同一参数 → 直接复用 ----------
+  const cacheOn = String(config.answerCache ?? true) !== 'false'
+  const ttlDays = Number(config.cacheTtlDays) || 7
+  let cacheKey = ''
+  if (cacheOn && used.length && lastUser) {
+    const version = await corpusVersion(event, user.id)
+    cacheKey = cacheKeyOf([
+      user.id, chatModel, threshold, rerankThreshold, topK, version,
+      normalizeQuestion(lastUser.content),
+    ])
+    const cached = await readAnswerCache(event, cacheKey, ttlDays)
+    if (cached) {
+      logEvent('chat.cache_hit', { userId: user.id, answerChars: cached.answer.length })
+      await recordMetric(event, {
+        userId: user.id,
+        conversationId,
+        model: chatModel,
+        retrievalMs,
+        totalMs: Date.now() - startedAt,
+        retrievedCount: candidates.length,
+        usedCount: cached.usedCount,
+        cached: true,
+      })
+      return textSseStream(
+        sseEvent({
+          sources: cached.sources,
+          usedCount: cached.usedCount,
+          retrieved: true,
+          threshold,
+          model: chatModel,
+          cached: true,
+        }),
+        cached.answer,
+      )
+    }
+  }
 
   // 有材料但一块都没过阈值 → 直接拒答，不花模型的钱
   if (retrievalOk && !used.length) {
@@ -272,6 +314,20 @@ export default defineEventHandler(async (event) => {
 
   async function finish(error?: string) {
     const totalMs = Date.now() - startedAt
+    // 只有正常答完、且材料确实用上了才缓存；出错和拒答都不缓存
+    if (!error && cacheKey && answer.length) {
+      await writeAnswerCache(event, {
+        key: cacheKey,
+        userId: user.id,
+        question: lastUser?.content ?? '',
+        answer,
+        sources: sourcePayload,
+        usedCount: used.length,
+        threshold,
+        model: chatModel,
+        corpusVersion: '',
+      })
+    }
     logEvent('chat.done', {
       userId: user.id,
       retrievalMs,
