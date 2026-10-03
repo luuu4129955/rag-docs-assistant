@@ -1,9 +1,8 @@
 import type { RetrievedChunk } from '../../utils/retrieve'
+import type { ContextBlock } from '../../utils/context'
 
 const MAX_TURNS = 20
 const MAX_CHARS = 4000
-// 单块进 prompt 的字数上限：块太长会挤占上下文，也更容易把噪声带进去
-const MAX_CONTEXT_CHARS = 900
 
 type MetricPayload = {
   userId?: string
@@ -71,10 +70,11 @@ function textSseStream(prefix: string, text: string) {
 /**
  * 把召回的分块拼成系统提示。三条规则对应三种失效：
  * 用自己的知识补充 → 幻觉；不标引用 → 无法溯源；材料没有却硬答 → 编造。
+ * 材料本身由 buildContext 组装（带邻居上下文 + 预算裁剪），这里只负责措辞。
  */
-function buildSystemPrompt(chunks: RetrievedChunk[]) {
-  const context = chunks
-    .map((c, i) => `[${i + 1}]（来自《${c.filename}》第 ${c.idx} 块）\n${c.content.slice(0, MAX_CONTEXT_CHARS)}`)
+function buildSystemPrompt(blocks: ContextBlock[]) {
+  const context = blocks
+    .map(b => `[${b.n}]（来自${b.label}）\n${b.text}`)
     .join('\n\n')
 
   return `你是文档问答助手，只能依据下面提供的材料回答。
@@ -203,8 +203,10 @@ export default defineEventHandler(async (event) => {
     )
   }
 
-  const finalMessages = used.length
-    ? [{ role: 'system', content: buildSystemPrompt(used) }, ...messages]
+  // 小检索、大上下文：把命中块的前后邻居一起带上，并按预算裁剪
+  const contextBlocks = used.length ? await buildContext(event, used) : []
+  const finalMessages = contextBlocks.length
+    ? [{ role: 'system', content: buildSystemPrompt(contextBlocks) }, ...messages]
     : messages
 
   const res = await fetch(`${chatBase}/chat/completions`, {
