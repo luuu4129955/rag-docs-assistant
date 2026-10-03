@@ -15,7 +15,7 @@ for (const q of questions) {
   seen.add(q.id)
   if (typeof q.q !== 'string' || !q.q.trim()) problems.push(`#${q.id} 题干为空`)
   if (!['answer', 'refuse'].includes(q.expect)) problems.push(`#${q.id} expect 只能是 answer / refuse`)
-  if (!['in-doc', 'adjacent', 'off-topic'].includes(q.type)) problems.push(`#${q.id} type 不在约定范围内`)
+  if (!['in-doc', 'literal', 'adjacent', 'off-topic'].includes(q.type)) problems.push(`#${q.id} type 不在约定范围内`)
 }
 
 const count = (t) => questions.filter(q => q.type === t).length
@@ -26,9 +26,10 @@ if (questions.length < 10) problems.push(`题量太少（${questions.length}）�
 if (shouldAnswer < 5) problems.push(`应答题只有 ${shouldAnswer} 题`)
 if (shouldRefuse < 3) problems.push(`应拒答题只有 ${shouldRefuse} 题，拒答能力测不出来`)
 if (count('adjacent') < 1) problems.push('缺少「相关但材料没写」这一类，这是最容易骗过阈值的情况')
+if (count('literal') < 1) problems.push('缺少「字面精确匹配」这一类，混合检索的收益就测不出来')
 
 console.log(`评测集：${questions.length} 题`)
-console.log(`  文档内 ${count('in-doc')} · 相关但没写 ${count('adjacent')} · 完全无关 ${count('off-topic')}`)
+console.log(`  文档内 ${count('in-doc')} · 字面匹配 ${count('literal')} · 相关但没写 ${count('adjacent')} · 完全无关 ${count('off-topic')}`)
 console.log(`  期望回答 ${shouldAnswer} · 期望拒答 ${shouldRefuse}`)
 
 if (problems.length) {

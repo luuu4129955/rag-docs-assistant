@@ -7,6 +7,7 @@
  *
  * type:
  *   in-doc   文档内直接可答
+ *   literal  带专有名词/编号，考字面精确匹配（混合检索的关键词那一路）
  *   adjacent 相关但材料确实没写（最容易骗过阈值的一类）
  *   off-topic 完全无关
  */
@@ -81,6 +82,29 @@ export const questions = [
     expect: 'answer',
     q: '生产构建时怎么去掉 console 和 debugger？',
     note: 'TerserPlugin / esbuild minify 开 drop_console、drop_debugger',
+  },
+
+  // ---- 字面精确匹配：考混合检索（关键词那一路）----
+  {
+    id: 16,
+    type: 'literal',
+    expect: 'answer',
+    q: 'manualChunks 是怎么用的？',
+    note: '专有名词，关键词那一路应该能直接命中',
+  },
+  {
+    id: 17,
+    type: 'literal',
+    expect: 'answer',
+    q: 'OpenTelemetry 在链路里做什么？',
+    note: '专有名词，出现在链路地图的节点清单里',
+  },
+  {
+    id: 18,
+    type: 'literal',
+    expect: 'answer',
+    q: 'TerserPlugin 和 esbuild minify 分别用在哪里？',
+    note: '两个工具名同时出现，考字面匹配与并列召回',
   },
 
   // ---- 相关但材料里没写：应该拒答 ----

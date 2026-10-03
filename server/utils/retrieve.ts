@@ -90,6 +90,7 @@ export async function retrieveChunks(
   owner: string,
   query: string,
   k: number,
+  options: { hybrid?: boolean } = {},
 ): Promise<RetrievedChunk[]> {
   const config = useRuntimeConfig(event)
   // 问题和分块必须用同一个模型向量化，否则两个向量不在同一个空间里
@@ -112,7 +113,9 @@ export async function retrieveChunks(
   let candidates = ((data ?? []) as RetrievedChunk[]).map(c => ({ ...c, foundBy: ['vector'] }))
 
   // 关键词那一路：函数还没建（迁移没跑）时自动跳过，不影响主流程
-  if (String(config.hybridEnabled ?? true) !== 'false') {
+  // options.hybrid 只给调试/对照实验用：传 false 就只走向量那一路
+  const hybridOn = options.hybrid ?? (String(config.hybridEnabled ?? true) !== 'false')
+  if (hybridOn) {
     try {
       const keywordHits = await keywordSearch(event, owner, query, recallSize)
       if (keywordHits.length) {

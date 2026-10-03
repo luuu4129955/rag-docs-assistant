@@ -15,7 +15,9 @@ export default defineEventHandler(async (event) => {
   }
 
   const config = useRuntimeConfig(event)
-  const results = await retrieveChunks(event, user.id, query, k)
+  // 调试面板可以传 hybrid:false 做对照（关掉关键词那一路）
+  const hybrid = typeof body?.hybrid === 'boolean' ? body.hybrid : undefined
+  const results = await retrieveChunks(event, user.id, query, k, { hybrid })
 
   return {
     query,
