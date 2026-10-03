@@ -171,6 +171,8 @@ export default defineEventHandler(async (event) => {
       idx: c.idx,
       similarity: Number(c.similarity),
       rerankScore: c.rerankScore ?? null,
+      keywordHits: c.keywordHits ?? null,
+      foundBy: c.foundBy ?? null,
       content: c.content,
     })),
     usedCount: used.length,

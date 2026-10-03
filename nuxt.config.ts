@@ -28,6 +28,8 @@ export default defineNuxtConfig({
     rerankModel: 'BAAI/bge-reranker-v2-m3',
     rerankTopN: 20,
     rerankThreshold: 0.1,
+    // 混合检索：向量 + 关键词两路，用 RRF 融合（要靠 sql/04-hybrid.sql 建的关键词函数）
+    hybridEnabled: true,
     // 定时任务密钥：Vercel Cron 会带着它来调用 /api/jobs/tick（也兼容 CRON_SECRET）
     jobsSecret: '',
   },

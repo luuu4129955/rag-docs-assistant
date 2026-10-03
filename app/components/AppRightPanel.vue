@@ -1,6 +1,6 @@
 <script setup lang="ts">
-type Source = { n: number, filename: string, idx: number, similarity: number, rerankScore?: number | null, content: string }
-type Hit = { id: number, filename: string, idx: number, content: string, similarity: number, rerankScore?: number | null }
+type Source = { n: number, filename: string, idx: number, similarity: number, rerankScore?: number | null, keywordHits?: number | null, foundBy?: string[] | null, content: string }
+type Hit = { id: number, filename: string, idx: number, content: string, similarity: number, rerankScore?: number | null, keywordHits?: number | null, foundBy?: string[] | null }
 type EvalSummary = {
   ranAt: string
   model?: string
@@ -89,6 +89,16 @@ const evalMissing = ref(false)
 const live = ref<LiveMetrics | null>(null)
 const liveError = ref('')
 
+async function refreshMetrics() {
+  try {
+    live.value = await $api('/api/metrics/summary') as LiveMetrics
+    liveError.value = ''
+  }
+  catch (e: any) {
+    liveError.value = e?.data?.statusMessage || '线上指标读取失败'
+  }
+}
+
 onMounted(async () => {
   try {
     evalData.value = await $api('/api/eval/latest') as EvalSummary
@@ -96,13 +106,11 @@ onMounted(async () => {
   catch {
     evalMissing.value = true
   }
-  try {
-    live.value = await $api('/api/metrics/summary') as LiveMetrics
-  }
-  catch (e: any) {
-    liveError.value = e?.data?.statusMessage || '线上指标读取失败'
-  }
+  await refreshMetrics()
 })
+
+// 每次回答结束后由父组件调用，避免"必须刷新页面才看到新指标"
+defineExpose({ refreshMetrics })
 </script>
 
 <template>
@@ -143,6 +151,9 @@ onMounted(async () => {
               <template v-if="s.rerankScore != null">重排 {{ s.rerankScore.toFixed(3) }} · </template>{{ pct(s.similarity) }}
             </span>
           </div>
+          <div v-if="s.foundBy?.length" class="src-path">
+            {{ s.foundBy.includes('vector') ? '向量' : '' }}{{ s.foundBy.length > 1 ? ' + ' : '' }}{{ s.foundBy.includes('keyword') ? `关键词命中 ${s.keywordHits ?? 0} 词` : '' }}
+          </div>
           <p class="src-c">{{ s.content }}</p>
         </div>
       </template>
@@ -170,6 +181,7 @@ onMounted(async () => {
         <div class="hit-top">
           <span class="num" :class="{ good: accepted(h) }">{{ pct(h.similarity) }}</span>
           <span v-if="h.rerankScore != null" class="num rerank">重排 {{ h.rerankScore.toFixed(3) }}</span>
+          <span v-if="h.foundBy?.length" class="tag path">{{ h.foundBy.includes('vector') ? '向量' : '' }}{{ h.foundBy.length > 1 ? '+' : '' }}{{ h.foundBy.includes('keyword') ? `关键词${h.keywordHits ?? 0}` : '' }}</span>
           <span v-if="!accepted(h)" class="tag">不进 prompt</span>
           <span class="hit-f">{{ h.filename }} · 第 {{ h.idx }} 块</span>
         </div>
@@ -272,6 +284,8 @@ onMounted(async () => {
 .hit-top .num { color: var(--muted); }
 .hit-top .num.good { color: var(--ok); }
 .hit-top .rerank { color: var(--accent); }
+.hit-top .path { color: var(--muted); }
+.src-path { color: var(--muted); font-size: 10px; margin: -2px 0 4px; }
 .hit-f { margin-left: auto; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hit-c { color: var(--muted); font-size: 11px; margin-top: 4px; line-height: 1.55; }
 

@@ -9,8 +9,73 @@ export type RetrievedChunk = {
   idx: number
   content: string
   similarity: number
+  /** 关键词那一路命中了几个词 */
+  keywordHits?: number
+  /** 这一块是被哪一路找到的：vector / keyword / 两者都有 */
+  foundBy?: string[]
+  /** RRF 融合分（只用于排序，不是相似度） */
+  fusionScore?: number
   /** 重排序分数：向量不够用时，用它决定谁进 prompt。未启用重排序时为 null */
   rerankScore?: number | null
+}
+
+// RRF（Reciprocal Rank Fusion）里的平滑常数：经验值 60，
+// 作用是让"第一名和第 100 名"的差距不要过于悬殊，避免单路结果一票独大
+const RRF_K = 60
+
+type RankedList = { tag: string, items: RetrievedChunk[] }
+
+/**
+ * RRF 融合：不看分数、只看名次。
+ * 每路各排各的，最后把名次加起来（1/(k+rank) 累加）再排序。
+ * 好处是不需要把"余弦相似度"和"关键词命中数"这两种量纲不同的分数强行归一化。
+ */
+function fuseByRrf(lists: RankedList[], limit: number): RetrievedChunk[] {
+  const acc = new Map<string, { item: RetrievedChunk, score: number, tags: Set<string> }>()
+
+  for (const { tag, items } of lists) {
+    items.forEach((item, i) => {
+      const key = `${item.document_id}#${item.idx}`
+      const entry = acc.get(key) ?? { item: { ...item }, score: 0, tags: new Set<string>() }
+      entry.score += 1 / (RRF_K + i + 1)
+      entry.tags.add(tag)
+      // 两路都命中时，保留向量分与关键词命中数，便于调试面板展示
+      if (item.similarity) entry.item.similarity = item.similarity
+      if (item.keywordHits) entry.item.keywordHits = item.keywordHits
+      acc.set(key, entry)
+    })
+  }
+
+  return [...acc.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(e => ({ ...e.item, foundBy: [...e.tags], fusionScore: e.score }))
+}
+
+/** 关键词那一路：交给数据库的 search_chunks_keyword，按命中词数排序 */
+async function keywordSearch(
+  event: any,
+  owner: string,
+  query: string,
+  limit: number,
+): Promise<RetrievedChunk[]> {
+  const db = supabaseAsUser(event)
+  const { data, error } = await db.rpc('search_chunks_keyword', {
+    p_query: query,
+    p_limit: limit,
+    p_owner: owner,
+  })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map((r: any) => ({
+    id: r.id,
+    document_id: r.document_id,
+    filename: r.filename,
+    idx: r.idx,
+    content: r.content,
+    // 关键词那一路没有余弦相似度，置 0；排序交给 RRF 和 reranker
+    similarity: 0,
+    keywordHits: r.hits,
+  }))
 }
 
 /**
@@ -44,7 +109,24 @@ export async function retrieveChunks(
     throw createError({ statusCode: 500, statusMessage: '检索失败', data: error.message })
   }
 
-  const candidates = (data ?? []) as RetrievedChunk[]
+  let candidates = ((data ?? []) as RetrievedChunk[]).map(c => ({ ...c, foundBy: ['vector'] }))
+
+  // 关键词那一路：函数还没建（迁移没跑）时自动跳过，不影响主流程
+  if (String(config.hybridEnabled ?? true) !== 'false') {
+    try {
+      const keywordHits = await keywordSearch(event, owner, query, recallSize)
+      if (keywordHits.length) {
+        candidates = fuseByRrf(
+          [{ tag: 'vector', items: candidates }, { tag: 'keyword', items: keywordHits }],
+          recallSize,
+        )
+      }
+    }
+    catch (e: any) {
+      logEvent('retrieve.keyword_failed', { message: e?.message || String(e) })
+    }
+  }
+
   if (candidates.length <= 1 || !rerankConfigured(event)) {
     return candidates.slice(0, k)
   }

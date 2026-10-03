@@ -26,6 +26,7 @@ const MAX_TURNS = 20
 const auth = useAuth()
 const { $api } = useNuxtApp()
 const { user: authUser, ready: authReady } = auth
+const rightPanel = ref<{ refreshMetrics?: () => Promise<void> } | null>(null)
 
 const messages = ref<Msg[]>([])
 const input = ref('')
@@ -280,6 +281,9 @@ async function send() {
   await saveMessage('assistant', last.content, last.sources?.length
     ? { sources: last.sources, usedCount: last.usedCount ?? 0, threshold: last.threshold ?? threshold.value }
     : undefined)
+
+  // 回答完顺手把线上指标刷新一次，省得用户手动刷页面
+  rightPanel.value?.refreshMetrics?.()
 }
 
 function gotoCite(msgIndex: number, n: number) {
@@ -530,6 +534,7 @@ onMounted(async () => {
     </main>
 
     <AppRightPanel
+      ref="rightPanel"
       v-show="!focusMode"
       v-model:tab="rightTab"
       :sources="activeSources"
