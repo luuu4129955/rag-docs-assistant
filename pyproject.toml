@@ -1,0 +1,20 @@
+# Python 侧的工具配置。放在 docs-qa/ 根目录是为了让工具能从项目根跑。
+# 注意：这不影响 Nuxt/pnpm，两边互不读取对方的配置。
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = [".venv", ".output", ".nuxt"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["\\.venv/", "\\.output/", "\\.nuxt/"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
