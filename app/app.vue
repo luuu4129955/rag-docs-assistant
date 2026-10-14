@@ -1,5 +1,5 @@
 <script setup lang="ts">
-type Source = { n: number, filename: string, idx: number, similarity: number, content: string }
+type Source = { n: number, documentId?: string | null, filename: string, idx: number, similarity: number, content: string }
 type Citations = { sources: Source[], usedCount: number, threshold: number }
 type Msg = {
   role: 'user' | 'assistant'
@@ -27,6 +27,16 @@ const auth = useAuth()
 const { $api } = useNuxtApp()
 const { user: authUser, ready: authReady } = auth
 const rightPanel = ref<{ refreshMetrics?: () => Promise<void> } | null>(null)
+
+// 本地缓存 / 分片上传 / 防抖节流：三件跟「刷新页面不难受」有关的事
+const cache = useLocalCache()
+const uploader = useUpload()
+const uploadProgress = ref<{ filename: string, doneParts: number, totalParts: number, resuming?: boolean } | null>(null)
+const preview = ref<{ open: boolean, documentId: string | null, filename: string, chunk?: string }>({
+  open: false,
+  documentId: null,
+  filename: '',
+})
 
 const messages = ref<Msg[]>([])
 const input = ref('')
@@ -87,30 +97,75 @@ function flash(text: string) {
 }
 
 async function loadHealth() {
-  try {
-    const h = await $api('/api/health') as { chatModel: string, ragThreshold: number }
+  const apply = (h: { chatModel: string, ragThreshold: number }) => {
     chatModel.value = h.chatModel || ''
     threshold.value = h.ragThreshold || threshold.value
   }
-  catch {}
+  // 模型名/阈值几乎不变，缓存 5 分钟；命中缓存时首屏不会等这个请求
+  const cached = cache.swr<{ chatModel: string, ragThreshold: number }>('health', {
+    maxAgeMs: 5 * 60_000,
+    fetcher: () => $api('/api/health') as Promise<{ chatModel: string, ragThreshold: number }>,
+    onUpdate: apply,
+  })
+  if (cached) apply(cached)
 }
 
-async function loadDocs() {
-  try {
-    docs.value = await $api('/api/documents') as Doc[]
+/**
+ * fresh=true 时跳过缓存、直接等最新结果——上传完、轮询进度这些场景必须看实时值，
+ * 拿缓存会让人以为「传上去了却没变化」。
+ */
+async function loadDocs(fresh = false) {
+  if (fresh) {
+    try {
+      const data = await $api('/api/documents') as Doc[]
+      docs.value = data
+      cache.write('docs', data)
+    }
+    catch (e) {
+      console.error('读取文档列表失败', e)
+    }
+    return
   }
-  catch (e) {
-    console.error('读取文档列表失败', e)
-  }
+  const cached = cache.swr<Doc[]>('docs', {
+    maxAgeMs: 10 * 60_000,
+    fetcher: () => $api('/api/documents') as Promise<Doc[]>,
+    onUpdate: (fresh) => { docs.value = fresh },
+  })
+  if (cached) docs.value = cached
 }
 
-async function loadConversations() {
-  try {
-    conversations.value = await $api('/api/conversations') as Conversation[]
+async function loadConversations(fresh = false) {
+  if (fresh) {
+    try {
+      const data = await $api('/api/conversations') as Conversation[]
+      conversations.value = data
+      cache.write('conversations', data)
+    }
+    catch (e) {
+      console.error('读取会话列表失败', e)
+    }
+    return
   }
-  catch (e) {
-    console.error('读取会话列表失败', e)
-  }
+  const cached = cache.swr<Conversation[]>('conversations', {
+    maxAgeMs: 10 * 60_000,
+    fetcher: () => $api('/api/conversations') as Promise<Conversation[]>,
+    onUpdate: (fresh) => { conversations.value = fresh },
+  })
+  if (cached) conversations.value = cached
+}
+
+// 打字过程中别每敲一下就写一次 localStorage：停 400ms 再存
+const saveDraft = debounce((text: string) => {
+  if (text.trim()) cache.write('draft', text)
+  else cache.remove('draft')
+}, 400)
+watch(input, v => saveDraft(v))
+
+// 一轮回答结束可能连着触发几次指标刷新，节流成最多 1.5 秒一次
+const refreshMetrics = throttle(() => { void rightPanel.value?.refreshMetrics?.() }, 1500)
+
+function openPreview(payload: { documentId: string, filename: string, chunk: string }) {
+  preview.value = { open: true, documentId: payload.documentId, filename: payload.filename, chunk: payload.chunk }
 }
 
 async function loadHistory(id: string) {
@@ -235,7 +290,14 @@ async function send() {
       return
     }
     if (!res.ok || !res.body) {
-      last.content = `请求失败：${res.status}`
+      // 429 是限流拦下的，把服务端那句人话透出来（含还要等几秒）
+      let msg = `请求失败：${res.status}`
+      try {
+        const detail = await res.json()
+        if (detail?.statusMessage) msg = detail.statusMessage
+      }
+      catch {}
+      last.content = msg
       return
     }
 
@@ -282,8 +344,8 @@ async function send() {
     ? { sources: last.sources, usedCount: last.usedCount ?? 0, threshold: last.threshold ?? threshold.value }
     : undefined)
 
-  // 回答完顺手把线上指标刷新一次，省得用户手动刷页面
-  rightPanel.value?.refreshMetrics?.()
+  // 回答完顺手把线上指标刷新一次（节流），省得用户手动刷页面
+  refreshMetrics()
 }
 
 function gotoCite(msgIndex: number, n: number) {
@@ -301,15 +363,15 @@ function gotoCite(msgIndex: number, n: number) {
 async function uploadFile(file: File) {
   uploading.value = true
   toast.value = ''
+  uploadProgress.value = { filename: file.name, doneParts: 0, totalParts: 1, resuming: false }
   try {
-    const form = new FormData()
-    form.append('file', file)
-    const r = await $api('/api/documents', {
-      method: 'POST',
-      body: form,
-    }) as { id: string, status: string }
-    flash('已上传，正在后台解析与向量化…')
-    await loadDocs()
+    // 分片上传：大文件被切成小片逐片传，弱网下一片失败只重传那一片；
+    // 同一个文件重新选中时，服务端按指纹找回进度，只补没传的部分。
+    await uploader.upload(file, $api, (p) => {
+      uploadProgress.value = { filename: p.filename, doneParts: p.doneParts, totalParts: p.totalParts, resuming: p.resumed }
+    })
+    flash(pendingHint(file))
+    await loadDocs(true)
     await processPending()
   }
   catch (e: any) {
@@ -318,7 +380,14 @@ async function uploadFile(file: File) {
   }
   finally {
     uploading.value = false
+    uploadProgress.value = null
   }
+}
+
+function pendingHint(file: File) {
+  return file.size > 4 * 1024 * 1024
+    ? `已上传（${(file.size / 1024 / 1024).toFixed(1)}MB 分片传输完成），正在后台解析与向量化…`
+    : '已上传，正在后台解析与向量化…'
 }
 
 /**
@@ -334,10 +403,12 @@ async function processPending() {
       const r = await $api('/api/jobs/tick', { method: 'POST' }) as {
         parsed: number
         embedded: number
+        requeued?: number
+        retrying?: number
         remaining: number
         done: boolean
       }
-      await loadDocs()
+      await loadDocs(true)
       if (r.done) {
         flash(`处理完成：本轮解析 ${r.parsed} 份、向量化 ${r.embedded} 块`)
         break
@@ -390,6 +461,9 @@ async function submitAuth(mode: 'login' | 'register') {
     if (mode === 'login') {
       await auth.login(mail, password.value)
       password.value = ''
+      // 换账号后先清掉上一份列表缓存，再由 bootstrap 拉最新的
+      cache.remove('docs')
+      cache.remove('conversations')
       await bootstrap()
     }
     else {
@@ -416,10 +490,17 @@ async function signOut() {
   messages.value = []
   conversations.value = []
   conversationId.value = null
+  // 缓存是按浏览器共享的，换账号必须清掉，否则下一个人会短暂看到上一个账号的列表
+  cache.remove('docs')
+  cache.remove('conversations')
+  cache.remove('draft')
 }
 
 onMounted(async () => {
   await loadHealth()
+  // 半截问题也存着：刷新/切标签回来接着写
+  const draft = cache.read<string>('draft', 24 * 3600 * 1000)
+  if (draft?.value) input.value = draft.value
   await auth.restore()
   if (authUser.value) await bootstrap()
 })
@@ -472,6 +553,7 @@ onMounted(async () => {
       :embedding="embedding"
       :chat-model="chatModel"
       :user-email="authUser.email"
+      :upload-progress="uploadProgress"
       @new-chat="newChat"
       @select-chat="selectConversation"
       @upload="uploadFile"
@@ -542,8 +624,18 @@ onMounted(async () => {
       :threshold="threshold"
       :refusal="activeRefusal"
       :highlight="highlight"
+      @preview="openPreview"
     />
   </div>
+
+  <DocPreview
+    v-if="authUser"
+    :open="preview.open"
+    :document-id="preview.documentId"
+    :filename="preview.filename"
+    :chunk="preview.chunk"
+    @close="preview.open = false"
+  />
 </template>
 
 <style scoped>

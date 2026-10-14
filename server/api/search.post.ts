@@ -5,6 +5,7 @@
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
+  await enforceRateLimit(event, user.id, 'search')
   const body = await readBody(event)
   const query = typeof body?.query === 'string' ? body.query.trim() : ''
   const rawK = Number(body?.k)

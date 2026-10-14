@@ -10,6 +10,7 @@ const MAX_BYTES = 4 * 1024 * 1024
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
+  await enforceRateLimit(event, user.id, 'uploadComplete')
 
   const form = await readMultipartFormData(event)
   const file = form?.find(part => part.name === 'file' && part.filename)

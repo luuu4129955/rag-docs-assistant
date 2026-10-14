@@ -21,16 +21,99 @@ export default defineEventHandler(async (event) => {
   const isCron = Boolean(secret) && Boolean(token) && token === secret
   const owner = isCron ? null : (await requireUser(event)).id
 
+  // 非定时任务才限流：Cron 带的是密钥，不该被按用户限流误伤
+  if (owner) await enforceRateLimit(event, owner, 'jobs')
+
   const db = owner ? supabaseAsUser(event) : supabaseServer(event)
   const storage = supabaseServer(event)
   const now = () => new Date().toISOString()
   let parsed = 0
   let embedded = 0
+  let requeued = 0
+
+  const maxAttempts = Number(config.jobsMaxAttempts) || 3
+  const retryBaseSec = Number(config.jobsRetryBaseSec) || 30
+
+  /**
+   * 失败处理：没到上限就退避重试（failed + next_retry_at），到了上限就进死信并告警。
+   * 退避用指数（30s → 60s → 120s）——上游偶发抖动时，第二次、第三次往往就过了，
+   * 但连续失败三次基本可以判定不是抖动。
+   */
+  async function markFailure(
+    doc: { id: string, filename?: string, attempts?: number | null },
+    stage: string,
+    err: unknown,
+  ) {
+    const attempts = (doc.attempts ?? 0) + 1
+    const message = String((err as any)?.message || err).slice(0, 300)
+    if (attempts >= maxAttempts) {
+      const { error } = await db.from('documents').update({
+        status: 'dead',
+        attempts,
+        error: message,
+        dead_lettered_at: now(),
+        next_retry_at: null,
+        updated_at: now(),
+      }).eq('id', doc.id)
+      // 没跑 sql/06 时这几列不存在：退回「只记失败」，别把状态卡在原地反复重试
+      if (error && /attempts|next_retry_at|dead_lettered_at/.test(error.message ?? '')) {
+        await db.from('documents').update({ status: 'failed', error: message, updated_at: now() }).eq('id', doc.id)
+        logEvent('jobs.retry_unavailable', { documentId: doc.id, hint: '数据库还没执行 sql/06-limits-jobs.sql' })
+        return
+      }
+      logEvent('jobs.dead_letter', { documentId: doc.id, filename: doc.filename, stage, attempts, error: message })
+      alert('文档处理进入死信', { documentId: doc.id, filename: doc.filename, stage, attempts, error: message })
+    }
+    else {
+      const backoffSec = retryBaseSec * 2 ** (attempts - 1)
+      const { error } = await db.from('documents').update({
+        status: 'failed',
+        attempts,
+        error: message,
+        next_retry_at: new Date(Date.now() + backoffSec * 1000).toISOString(),
+        updated_at: now(),
+      }).eq('id', doc.id)
+      if (error && /attempts|next_retry_at|dead_lettered_at/.test(error.message ?? '')) {
+        await db.from('documents').update({ status: 'failed', error: message, updated_at: now() }).eq('id', doc.id)
+        logEvent('jobs.retry_unavailable', { documentId: doc.id, hint: '数据库还没执行 sql/06-limits-jobs.sql' })
+        return
+      }
+      logEvent('jobs.retry_scheduled', { documentId: doc.id, stage, attempts, backoffSec })
+    }
+  }
+
+  // ---------- 第 0 段：把退避到点的失败任务重新排进队列 ----------
+  // 之所以重置回 pending 而不是记个中间态：解析这一步本身是幂等的
+  // （会先删旧分块再重写），从头跑一遍最省心，也不会留下半截数据。
+  try {
+    let retryQuery = db
+      .from('documents')
+      .select('id')
+      .eq('status', 'failed')
+      .is('dead_lettered_at', null)
+      .lt('attempts', maxAttempts)
+      .or(`next_retry_at.is.null,next_retry_at.lte.${now()}`)
+      .limit(3)
+    if (owner) retryQuery = retryQuery.eq('user_id', owner)
+    const { data: retryDocs, error } = await retryQuery
+    if (error) throw new Error(error.message)
+    for (const doc of retryDocs ?? []) {
+      const { error: upError } = await db.from('documents')
+        .update({ status: 'pending', next_retry_at: null, updated_at: now() })
+        .eq('id', doc.id)
+      if (!upError) requeued++
+    }
+  }
+  catch (e: any) {
+    // 没跑 sql/06 时这一整段跳过，主流程照常
+    logEvent('jobs.retry_scan_skipped', { message: e?.message || String(e) })
+  }
 
   // ---------- 第一段：解析 + 分块 ----------
   let parseQuery = db
     .from('documents')
-    .select('id, storage_path, filename')
+    // select('*') 而不是点名道姓：没跑 sql/06 时 attempts 不存在也不会整段报错
+    .select('*')
     .eq('status', 'pending')
     .order('created_at', { ascending: true })
     .limit(PARSE_PER_TICK)
@@ -71,16 +154,14 @@ export default defineEventHandler(async (event) => {
     }
     catch (e: any) {
       console.error('[jobs] 解析失败', doc.filename, e?.message || e)
-      await db.from('documents')
-        .update({ status: 'failed', error: String(e?.message || e).slice(0, 300), updated_at: now() })
-        .eq('id', doc.id)
+      await markFailure(doc, 'parse', e)
     }
   }
 
   // ---------- 第二段：向量化 ----------
   let embedQuery = db
     .from('documents')
-    .select('id')
+    .select('*')
     .eq('status', 'embedding')
     .order('created_at', { ascending: true })
     .limit(5)
@@ -111,9 +192,7 @@ export default defineEventHandler(async (event) => {
     }
     catch (e: any) {
       console.error('[jobs] 向量化失败', doc.id, e?.message || e)
-      await db.from('documents')
-        .update({ status: 'failed', error: String(e?.message || e).slice(0, 300), updated_at: now() })
-        .eq('id', doc.id)
+      await markFailure(doc, 'embed', e)
       continue
     }
 
@@ -133,13 +212,31 @@ export default defineEventHandler(async (event) => {
     .select('id', { count: 'exact', head: true })
     .in('status', ['pending', 'embedding'])
   if (owner) restQuery = restQuery.eq('user_id', owner)
-  const { count: remaining } = await restQuery
+  const { count: running } = await restQuery
+
+  // 等待重试的失败任务也算「没处理完」——否则前端会在它们到点重试之前就停止轮询
+  let retrying = 0
+  try {
+    let failedQuery = db
+      .from('documents')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'failed')
+      .is('dead_lettered_at', null)
+    if (owner) failedQuery = failedQuery.eq('user_id', owner)
+    const { count, error } = await failedQuery
+    if (!error) retrying = count ?? 0
+  }
+  catch {}
+
+  const remaining = (running ?? 0) + retrying
 
   return {
     parsed,
     embedded,
-    remaining: remaining ?? 0,
-    done: (remaining ?? 0) === 0,
+    requeued,
+    retrying,
+    remaining,
+    done: remaining === 0,
     scope: owner ? 'self' : 'all',
   }
 })

@@ -7,6 +7,9 @@ type Doc = {
   embeddedCount: number
   status?: string
   error?: string | null
+  attempts?: number | null
+  next_retry_at?: string | null
+  dead_lettered_at?: string | null
 }
 type Conversation = { id: string, title: string | null, created_at: string }
 
@@ -18,6 +21,7 @@ const props = defineProps<{
   embedding?: boolean
   chatModel?: string
   userEmail?: string
+  uploadProgress?: { filename: string, doneParts: number, totalParts: number, resuming?: boolean } | null
 }>()
 
 const emit = defineEmits<{
@@ -38,8 +42,31 @@ const busy = computed(() =>
   props.docs.some(d => d.status === 'pending' || d.status === 'embedding'),
 )
 
+/** 有失败任务在等重试：这时「继续处理」也该可点，用来手动催一下 */
+const waitingRetry = computed(() =>
+  props.docs.some(d => d.status === 'failed' && !d.dead_lettered_at),
+)
+
+function pctOf(p: { doneParts: number, totalParts: number }) {
+  if (!p.totalParts) return '0%'
+  return `${Math.round((p.doneParts / p.totalParts) * 100)}%`
+}
+
+/** 距离下次重试还有多久（静态快照，不逐秒刷新——够用就行） */
+function retryHint(next?: string | null) {
+  if (!next) return ''
+  const ms = new Date(next).getTime() - Date.now()
+  if (ms <= 0) return '（即将重试）'
+  return `（${Math.ceil(ms / 1000)}s 后重试）`
+}
+
 function statusOf(d: Doc) {
-  if (d.status === 'failed') return { text: '失败', cls: 'bad', title: d.error || '' }
+  if (d.status === 'dead') {
+    return { text: '已放弃', cls: 'bad', title: `重试 ${d.attempts ?? 0} 次仍失败：${d.error || ''}` }
+  }
+  if (d.status === 'failed') {
+    return { text: `失败${retryHint(d.next_retry_at)}`, cls: 'bad', title: d.error || '' }
+  }
   if (d.status === 'pending') return { text: '待解析', cls: 'wait', title: '已上传，等后台任务处理' }
   if (d.status === 'embedding') return { text: '向量化中', cls: 'wait', title: '' }
   return { text: '就绪', cls: 'ok', title: '' }
@@ -106,7 +133,16 @@ function shortTime(iso: string) {
     </div>
 
     <div class="foot">
+      <div v-if="uploadProgress" class="prog">
+        <div class="prog-top">
+          <span class="prog-name" :title="uploadProgress.filename">{{ uploadProgress.filename }}</span>
+          <span class="prog-num num">{{ uploadProgress.doneParts }}/{{ uploadProgress.totalParts }}</span>
+        </div>
+        <div class="prog-bar"><i :style="{ width: pctOf(uploadProgress) }" /></div>
+        <p v-if="uploadProgress.resuming" class="prog-note">检测到未传完的分片，接着上次传…</p>
+      </div>
       <p v-if="pendingCount" class="warn">还有 {{ pendingCount }} 块没向量化</p>
+      <p v-if="waitingRetry" class="warn">有任务失败，正在自动重试</p>
       <div class="foot-actions">
         <button class="btn" :disabled="uploading" @click="fileInput?.click()">
           <AppIcon name="upload" />
@@ -114,7 +150,7 @@ function shortTime(iso: string) {
         </button>
         <button
           class="btn"
-          :disabled="embedding || (!pendingCount && !busy)"
+          :disabled="embedding || (!pendingCount && !busy && !waitingRetry)"
           @click="emit('process')"
         >
           <AppIcon name="sparkles" />

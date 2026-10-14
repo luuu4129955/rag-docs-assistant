@@ -26,3 +26,11 @@ logs
 
 # 评测脚本生成的最近一次跑分（本地结果，不入库）
 eval/latest.json
+
+# Python
+.venv
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

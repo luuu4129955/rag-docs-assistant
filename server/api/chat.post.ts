@@ -100,6 +100,8 @@ export default defineEventHandler(async (event) => {
   // 先认人：没登录就没有问答，避免匿名请求把额度刷光
   const user = await requireUser(event)
   logEvent('chat.start', { userId: user.id })
+  // 限流放在最前面：有人刷接口时，连检索和模型调用都不该发生
+  await enforceRateLimit(event, user.id, 'chat')
 
   const body = await readBody(event)
   const raw = Array.isArray(body?.messages) ? body.messages : []
@@ -209,6 +211,8 @@ export default defineEventHandler(async (event) => {
   // 先把召回结果发给前端：引用列表要显示，且必须在正文之前到达
   const sourcePayload = candidates.map((c, i) => ({
     n: i + 1,
+    // 带上 document_id：前端拿它去取原文做预览，不用再按文件名反查
+    documentId: c.document_id,
     filename: c.filename,
     idx: c.idx,
     similarity: Number(c.similarity),

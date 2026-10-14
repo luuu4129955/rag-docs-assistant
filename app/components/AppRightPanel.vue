@@ -1,5 +1,5 @@
 <script setup lang="ts">
-type Source = { n: number, filename: string, idx: number, similarity: number, rerankScore?: number | null, keywordHits?: number | null, foundBy?: string[] | null, content: string }
+type Source = { n: number, documentId?: string | null, filename: string, idx: number, similarity: number, rerankScore?: number | null, keywordHits?: number | null, foundBy?: string[] | null, content: string }
 type Hit = { id: number, filename: string, idx: number, content: string, similarity: number, rerankScore?: number | null, keywordHits?: number | null, foundBy?: string[] | null }
 type EvalSummary = {
   ranAt: string
@@ -29,7 +29,10 @@ const props = defineProps<{
   highlight?: number
 }>()
 
-const emit = defineEmits<{ (e: 'update:tab', tab: 'src' | 'debug' | 'eval'): void }>()
+const emit = defineEmits<{
+  (e: 'update:tab', tab: 'src' | 'debug' | 'eval'): void
+  (e: 'preview', payload: { documentId: string, filename: string, chunk: string }): void
+}>()
 
 const { $api } = useNuxtApp()
 
@@ -156,6 +159,14 @@ defineExpose({ refreshMetrics })
             {{ s.foundBy.includes('vector') ? '向量' : '' }}{{ s.foundBy.length > 1 ? ' + ' : '' }}{{ s.foundBy.includes('keyword') ? `关键词命中 ${s.keywordHits ?? 0} 词` : '' }}
           </div>
           <p class="src-c">{{ s.content }}</p>
+          <button
+            v-if="s.documentId"
+            class="src-open"
+            @click="emit('preview', { documentId: String(s.documentId), filename: s.filename, chunk: s.content })"
+          >
+            <AppIcon name="file" :size="11" />
+            预览原文
+          </button>
         </div>
       </template>
     </div>
@@ -277,6 +288,12 @@ defineExpose({ refreshMetrics })
 .src-f { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .src-s { margin-left: auto; color: var(--muted); font-size: 11px; }
 .src-c { color: var(--muted); font-size: 11px; line-height: 1.55; max-height: 96px; overflow: hidden; }
+.src-open {
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 6px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--muted); border-radius: 999px; padding: 1px 9px; font-size: 11px;
+}
+.src-open:hover { color: var(--accent); border-color: var(--accent); }
 
 .search-bar { display: flex; gap: 6px; margin-bottom: 8px; }
 .search-bar input {

@@ -2,11 +2,21 @@ export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
   const db = supabaseAsUser(event)
 
-  const { data: docs, error } = await db
+  const baseSelect = 'id, filename, char_count, status, error, created_at'
+  let { data: docs, error } = await db
     .from('documents')
-    .select('id, filename, char_count, status, error, created_at')
+    .select(`${baseSelect}, attempts, next_retry_at, dead_lettered_at`)
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
+
+  // 没跑 sql/06 时退回旧字段，页面上少显示重试信息，但列表还能用
+  if (error && /attempts|next_retry_at|dead_lettered_at/.test(error.message ?? '')) {
+    ;({ data: docs, error } = await db
+      .from('documents')
+      .select(baseSelect)
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false }))
+  }
 
   if (error) {
     console.error('[documents] 读取列表失败', error)
