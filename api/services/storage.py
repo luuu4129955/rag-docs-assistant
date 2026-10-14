@@ -42,11 +42,24 @@ def _object_url(settings: Settings, path: str) -> str:
     return f"{_base(settings)}/storage/v1/object/{settings.storage_bucket}/{path}"
 
 
-async def upload(settings: Settings, path: str, data: bytes, content_type: str, upsert: bool = False) -> None:
+def _headers(settings: Settings, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Supabase 的网关**同时**要 apikey 和 Authorization。
+
+    只带 Authorization 时 Storage 会返回一个非常误导人的
+    `400 {"code":"NoSuchBucket","message":"Bucket not found"}` ——
+    看起来像桶不存在，实际是缺 apikey。
+    """
     headers = {
+        "apikey": settings.supabase_service_key,
         "Authorization": f"Bearer {settings.supabase_service_key}",
-        "Content-Type": content_type,
     }
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+async def upload(settings: Settings, path: str, data: bytes, content_type: str, upsert: bool = False) -> None:
+    headers = _headers(settings, {"Content-Type": content_type})
     if upsert:
         # 断点续传会重传同一片，覆盖比报错再重试省事
         headers["x-upsert"] = "true"
@@ -60,14 +73,15 @@ async def upload(settings: Settings, path: str, data: bytes, content_type: str, 
 
 
 async def download(settings: Settings, path: str) -> bytes:
-    res = await _http().get(
-        _object_url(settings, path),
-        headers={"Authorization": f"Bearer {settings.supabase_service_key}"},
-    )
+    res = await _http().get(_object_url(settings, path), headers=_headers(settings))
     if res.status_code == 404:
         raise HTTPException(status_code=404, detail="文件不存在")
     if res.status_code >= 400:
-        raise HTTPException(status_code=500, detail=f"存储读取失败（{res.status_code}）")
+        # 带上响应体：不然只剩一个状态码，排查起来全靠猜
+        raise HTTPException(
+            status_code=500,
+            detail=f"存储读取失败（{res.status_code}）：{res.text[:200]}",
+        )
     return res.content
 
 
@@ -77,10 +91,7 @@ async def remove(settings: Settings, paths: list[str]) -> None:
     res = await _http().request(
         "DELETE",
         f"{_base(settings)}/storage/v1/object/{settings.storage_bucket}",
-        headers={
-            "Authorization": f"Bearer {settings.supabase_service_key}",
-            "Content-Type": "application/json",
-        },
+        headers=_headers(settings, {"Content-Type": "application/json"}),
         json={"prefixes": paths},
     )
     # 删除失败不致命（多半是文件本来就不在），记日志由调用方决定
@@ -93,10 +104,7 @@ async def remove(settings: Settings, paths: list[str]) -> None:
 async def list_objects(settings: Settings, prefix: str, limit: int = 100) -> list[dict[str, Any]]:
     res = await _http().post(
         f"{_base(settings)}/storage/v1/object/list/{settings.storage_bucket}",
-        headers={
-            "Authorization": f"Bearer {settings.supabase_service_key}",
-            "Content-Type": "application/json",
-        },
+        headers=_headers(settings, {"Content-Type": "application/json"}),
         json={"prefix": prefix, "limit": limit, "offset": 0},
     )
     if res.status_code >= 400:
@@ -108,10 +116,7 @@ async def list_objects(settings: Settings, prefix: str, limit: int = 100) -> lis
 async def signed_url(settings: Settings, path: str, expires_in: int = 3600) -> str:
     res = await _http().post(
         f"{_base(settings)}/storage/v1/object/sign/{settings.storage_bucket}/{path}",
-        headers={
-            "Authorization": f"Bearer {settings.supabase_service_key}",
-            "Content-Type": "application/json",
-        },
+        headers=_headers(settings, {"Content-Type": "application/json"}),
         json={"expiresIn": expires_in},
     )
     if res.status_code >= 400:

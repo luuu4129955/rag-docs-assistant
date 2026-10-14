@@ -8,6 +8,7 @@
   "scripts": {
     "build": "nuxt build",
     "dev": "nuxt dev",
+    "dev:python": "bash scripts/dev.sh",
     "generate": "nuxt generate",
     "check:eval-set": "node eval/check-set.mjs",
     "verify": "pnpm check:eval-set && pnpm build",
